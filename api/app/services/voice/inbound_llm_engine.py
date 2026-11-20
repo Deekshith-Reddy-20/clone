@@ -422,17 +422,7 @@ def process_inbound_speech_llm_first(
             lang=bcp47,
             tool_source="safety_net",
         )
-        ws, fields, _ = execute_tool(
-            db,
-            call,
-            fields,
-            "send_whatsapp_details",
-            {"topic": "location"},
-            caller_text=text,
-            lang=bcp47,
-            tool_source="safety_net",
-        )
-        spoken_loc = ws or tool_spoken
+        spoken_loc = tool_spoken
         if spoken_loc:
             reply, _ = _apply_guard_and_polish(spoken_loc, brief=brief, lang=bcp47, vertical=vertical)
             fields["speech_stack"] = "llm_first"

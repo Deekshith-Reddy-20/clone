@@ -105,12 +105,16 @@ async def run_pstn_stream_turn(
     )
     if is_location_followup(text) and has_loc and not location_detail_remaining(profile, last_reply):
         tool_spoken, fields, _ = execute_tool(
-            db, call, fields, "save_lead", {"question": text, "reason": "location_details"}, caller_text=text, lang=bcp47
+            db,
+            call,
+            fields,
+            "save_lead",
+            {"question": text, "reason": "location_details"},
+            caller_text=text,
+            lang=bcp47,
+            tool_source="safety_net",
         )
-        ws, fields, _ = execute_tool(
-            db, call, fields, "send_whatsapp_details", {"topic": "location"}, caller_text=text, lang=bcp47
-        )
-        spoken_loc = ws or tool_spoken
+        spoken_loc = tool_spoken
         if spoken_loc:
             reply, _ = _apply_guard_and_polish(spoken_loc, brief=brief, lang=bcp47, vertical=vertical)
             await on_sentence(reply, "karyuk-loc")

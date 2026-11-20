@@ -21,6 +21,7 @@ from app.services.voice.voice_fact_guard import (
     classify_save_lead_miss,
     reply_invented_negative,
 )
+from app.services.voice.voice_location_followup import whatsapp_send_consented
 from app.services.voice.voice_output_guard import guard_reply_rejected
 
 SUITE = ROOT / "tests" / "conversations" / "live_eval_suite.json"
@@ -55,9 +56,10 @@ def _expect_hit(
             continue
         src = str(x.get("source") or "llm_native")
         if native_only:
-            allowed = sources_ok or ["llm_native"]
-            if src not in allowed:
+            if src != "llm_native":
                 continue
+        elif sources_ok is not None and src not in sources_ok:
+            continue
         return True
     return False
 
@@ -121,6 +123,15 @@ def _run_conv_steps(
                     f"expected={step['expect_tool_any']} "
                     f"got={[(x.get('name'), x.get('source')) for x in tools]}"
                 )
+        if "send_whatsapp_details" in names and not whatsapp_send_consented(
+            step["caller"], last_agent_reply=last
+        ):
+            fp_count += 1
+            print(
+                f"WHATSAPP_FP {conv['id']}: caller={step['caller'][:60]!r} "
+                f"last_agent={last[:80]!r} "
+                f"fired send_whatsapp_details without prior offer+yes"
+            )
         forbidden = step.get("forbid_tool_any") or []
         if forbidden:
             bad = [n for n in names if n in forbidden]
@@ -233,10 +244,11 @@ def main() -> int:
         f"tool_accuracy_combined={tool_ok}/{tool_tot} ({100*tool_ok/max(tool_tot,1):.1f}%)"
     )
     print(
-        f"tool_accuracy_llm_native={native_ok}/{native_tot} ({100*native_ok/max(native_tot,1):.1f}%)"
+        f"tool_accuracy_native_only={native_ok}/{native_tot} "
+        f"({100*native_ok/max(native_tot,1):.1f}%) [llm_native source only]"
     )
     if primary == "sarvam":
-        print(f"sarvam_native_tool_accuracy={native_ok}/{native_tot}")
+        print(f"sarvam_llm_native_tool_accuracy={native_ok}/{native_tot}")
     print(f"tools_by_source={dict(sorted(tools_by_source.items()))}")
     print(f"safety_net_false_positives={fp_count} (must_be_0)")
     print(f"hallucination_regen_events={hallu} invented_negative_regen={invented} grounding_blocks={guard_blocks}")

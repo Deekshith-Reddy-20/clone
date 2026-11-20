@@ -311,6 +311,17 @@ def _execute_tool_inner(
                 )
             fields["last_tool"] = "transfer_to_human:callback"
     elif name == "send_whatsapp_details":
+        from app.services.voice.voice_location_followup import whatsapp_send_consented
+
+        turns = list((fields.get("inbound_chat") or {}).get("turns") or [])
+        last_agent = ""
+        for t in reversed(turns):
+            if t.get("role") == "assistant":
+                last_agent = str(t.get("text") or "")
+                break
+        if not whatsapp_send_consented(caller_text, last_agent_reply=last_agent):
+            logger.info("send_whatsapp_details blocked: no offer+accept")
+            return "", fields, False
         topic = str(args.get("topic") or "location").strip()
         fields["whatsapp_stub_topic"] = topic
         spoken = (
