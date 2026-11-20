@@ -1,0 +1,500 @@
+"""Deterministic lodging booking slots for LLM-first calls."""
+
+from __future__ import annotations
+
+import json
+import re
+from datetime import date, timedelta
+
+from app.services.voice.booking_dialogue import is_book_command
+from app.services.voice.booking_state import (
+    BOOKING_KEY,
+    BookingState,
+    confirmation_yes,
+    dump_booking,
+    extract_guest_count,
+    load_booking,
+    merge_utterance,
+    utterance_fingerprint,
+)
+from app.services.voice.voice_dates import apply_resolved_dates_to_booking, resolve_dates, today_local
+
+_WEEKDAY_EN_FULL = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+_TE_WEEKDAY_FULL = (
+    "సోమవారం",
+    "మంగళవారం",
+    "బుధవారం",
+    "గురువారం",
+    "శుక్రవారం",
+    "శనివారం",
+    "ఆదివారం",
+)
+_PEOPLE_RE = re.compile(
+    r"(వస్తారు|మంది|guests?|members?|గురం|గురు|నలుగురు|people)",
+    re.I,
+)
+_NIGHTS_ASK = re.compile(r"(ఎన్ని\s*nights|how many nights)", re.I)
+_GUESTS_ASK = re.compile(r"(ఎంత\s*మంది|how many guests)", re.I)
+_CONFIRM_ASK = re.compile(r"(పెట్టమంటారా|confirm|ఇలా\s*request)", re.I)
+_DATE_ASK = re.compile(r"(check-?in|చెక్-ఇన్|తేదీ)", re.I)
+_INTERRUPT_RE = re.compile(
+    r"(pool|పూల్|swim|price|rate|ధర|ఎంత|ఉందా\?|amenit|jacuzzi|spa\b|timing|సమయం)",
+    re.I,
+)
+
+_ACK_GUEST_FNS = (
+    lambda n: f"సరే అండి, {n} guests note చేశాను.",
+    lambda n: f"ok అండి, {n} guests.",
+    lambda n: f"అలాగే, {n} మంది noted.",
+    lambda n: f"noted — {n} guests.",
+)
+
+
+def _iso_or_none(v: str | None) -> date | None:
+    if not v:
+        return None
+    try:
+        return date.fromisoformat(v)
+    except ValueError:
+        return None
+
+
+def nights_count(state: BookingState) -> int | None:
+    if state.nights:
+        return state.nights
+    cin, cout = _iso_or_none(state.check_in), _iso_or_none(state.check_out)
+    if cin and cout and cout > cin:
+        return (cout - cin).days
+    return None
+
+
+def spoken_stay_date(d: date, *, lang: str, anchor: date | None = None) -> str:
+    anchor = anchor or today_local()
+    if lang == "te-IN":
+        wd = _TE_WEEKDAY_FULL[d.weekday()]
+        base = f"{wd} {d.day} {d.strftime('%B')}"
+    else:
+        wd = _WEEKDAY_EN_FULL[d.weekday()]
+        base = f"{wd} {d.day} {d.strftime('%B')}"
+    if d.year != anchor.year:
+        return f"{base} {d.year}"
+    return base
+
+
+def format_check_in_label(state: BookingState, *, lang: str = "te-IN") -> str:
+    d = _iso_or_none(state.check_in)
+    if not d:
+        return "MISSING"
+    return spoken_stay_date(d, lang=lang)
+
+
+def _phone_line(state: BookingState, fields: dict) -> str:
+    if state.callback_phone:
+        return state.callback_phone[-4:] + " (callback)"
+    e164 = str(fields.get("caller_e164") or "").strip()
+    if e164:
+        return f"{e164} (caller ID)"
+    return "MISSING"
+
+
+def slot_status(state: BookingState) -> str:
+    if state.booking_confirmed:
+        return "submitted"
+    if state.awaiting_confirmation:
+        return "awaiting_confirm"
+    return "collecting"
+
+
+def missing_booking_slots(state: BookingState, fields: dict) -> list[str]:
+    miss: list[str] = []
+    if not state.check_in:
+        miss.append("check_in")
+    if not nights_count(state):
+        miss.append("nights")
+    if not state.guest_count:
+        miss.append("guests")
+    e164 = str(fields.get("caller_e164") or "").strip()
+    if not state.callback_phone and not e164:
+        miss.append("phone")
+    return miss
+
+
+def next_missing_slot(state: BookingState, fields: dict) -> str | None:
+    miss = missing_booking_slots(state, fields)
+    return miss[0] if miss else None
+
+
+def infer_last_slot_asked(last_agent: str, state: BookingState) -> str | None:
+    if state.last_slot_asked:
+        return state.last_slot_asked
+    t = last_agent or ""
+    if _CONFIRM_ASK.search(t):
+        return "confirm"
+    if _NIGHTS_ASK.search(t):
+        return "nights"
+    if _GUESTS_ASK.search(t):
+        return "guests"
+    if _DATE_ASK.search(t) and "check-out" not in t.lower():
+        return "check_in"
+    if state.last_prompt in ("check_in", "check_out", "guests", "month", "confirm_checkout"):
+        if state.last_prompt == "guests":
+            return "guests"
+        if state.last_prompt in ("check_out", "confirm_checkout"):
+            return "nights"
+        return state.last_prompt
+    return None
+
+
+def is_people_count_utterance(text: str) -> bool:
+    guests = extract_guest_count(text)
+    return guests is not None and bool(_PEOPLE_RE.search(text or ""))
+
+
+def pick_ack(fields: dict, *, kind: str, guest_n: int | None = None) -> str:
+    key = f"slot_ack_{kind}"
+    idx = int(fields.get(key) or 0)
+    fields[key] = (idx + 1) % len(_ACK_GUEST_FNS)
+    if kind == "guests" and guest_n:
+        return _ACK_GUEST_FNS[idx](guest_n)
+    return _ACK_GUEST_FNS[idx](guest_n or 0)
+
+
+def is_booking_interrupt(caller_text: str) -> bool:
+    from app.services.voice.employee_playbook import is_factual_business_question
+
+    t = caller_text or ""
+    if is_factual_business_question(t):
+        return True
+    if _INTERRUPT_RE.search(t):
+        return True
+    if re.search(r"\b(what|how|ఏంటి|ఎప్పుడు|ఎంత)\b", t, re.I) and not resolve_dates(
+        t, anchor=today_local()
+    ).check_in:
+        if not is_people_count_utterance(t) and not resolve_dates(t, anchor=today_local()).nights:
+            if len(t.split()) > 2:
+                return True
+    return False
+
+
+def apply_slot_merge(
+    fields: dict,
+    caller_text: str,
+    *,
+    last_agent_reply: str | None = None,
+) -> dict:
+    state = load_booking(fields)
+    last_slot = infer_last_slot_asked(last_agent_reply or "", state)
+    text = caller_text or ""
+
+    if last_slot == "nights" and is_people_count_utterance(text):
+        g = extract_guest_count(text)
+        if g:
+            state.guest_count = g
+            state.last_utterance_hash = utterance_fingerprint(text)
+            fields[BOOKING_KEY] = dump_booking(state)
+            fields = apply_resolved_dates_to_booking(fields, "", anchor=today_local())
+            state = load_booking(fields)
+            fields["_slot_guest_from_nights_question"] = True
+    else:
+        state = merge_utterance(state, text)
+        fields[BOOKING_KEY] = dump_booking(state)
+        fields = apply_resolved_dates_to_booking(fields, text, anchor=today_local())
+        state = load_booking(fields)
+
+    resolved = resolve_dates(text, anchor=today_local())
+    if resolved.nights and last_slot != "guests" and not (
+        last_slot == "nights" and is_people_count_utterance(text)
+    ):
+        state.nights = resolved.nights
+        if state.check_in and not state.check_out:
+            ci = date.fromisoformat(state.check_in)
+            state.check_out = (ci + timedelta(days=resolved.nights)).isoformat()
+    if resolved.nights and last_slot == "nights" and not is_people_count_utterance(text):
+        n = resolved.nights or extract_guest_count(text)
+        if n and n <= 14:
+            state.nights = n
+            if state.check_in:
+                ci = date.fromisoformat(state.check_in)
+                state.check_out = (ci + timedelta(days=n)).isoformat()
+
+    if slot_verbal_reject(text) and resolved.nights:
+        state.nights = resolved.nights
+        if state.check_in:
+            ci = date.fromisoformat(state.check_in)
+            state.check_out = (ci + timedelta(days=resolved.nights)).isoformat()
+        state.awaiting_confirmation = False
+        fields["_slot_reject_reread"] = True
+
+    fields[BOOKING_KEY] = dump_booking(state)
+    return fields
+
+
+def format_booking_slot_block(state: BookingState, fields: dict) -> str:
+    n = nights_count(state)
+    nights_s = str(n) if n else "MISSING"
+    guests_s = str(state.guest_count) if state.guest_count else "MISSING"
+    nxt = next_missing_slot(state, fields) or "confirm"
+    if slot_status(state) == "awaiting_confirm":
+        nxt = "confirm"
+    elif slot_status(state) == "submitted":
+        nxt = "done"
+    cin = format_check_in_label(state, lang=str(fields.get("conversation_language") or "te-IN"))
+    return (
+        "BOOKING: "
+        f"check_in={cin} | nights={nights_s} | guests={guests_s} | "
+        f"room=any | phone={_phone_line(state, fields)} | "
+        f"status={slot_status(state)}. NEXT: {nxt}."
+    )
+
+
+def ask_line_for_slot(slot: str, lang: str, _state: BookingState) -> str:
+    if slot == "check_in":
+        return {
+            "te-IN": "check-in తేదీ చెప్పండి అండి.",
+            "en-IN": "What date would you like to check in?",
+        }.get(lang, "Check-in date?")
+    if slot == "nights":
+        return {
+            "te-IN": "ఎన్ని nights అండి?",
+            "en-IN": "How many nights?",
+        }.get(lang, "How many nights?")
+    if slot == "guests":
+        return {
+            "te-IN": "ఎంత మంది వస్తారు?",
+            "en-IN": "How many guests?",
+        }.get(lang, "How many guests?")
+    if slot == "phone":
+        return {
+            "te-IN": "confirm కోసం మీ మొబైల్ నంబర్ చెప్పగలరా?",
+            "en-IN": "What mobile number can we reach you on?",
+        }.get(lang, "Mobile number?")
+    return ""
+
+
+def confirmation_readback(state: BookingState, lang: str) -> str:
+    d = _iso_or_none(state.check_in)
+    if not d:
+        return ask_line_for_slot("check_in", lang, state)
+    n = nights_count(state) or 0
+    g = state.guest_count or 0
+    when = spoken_stay_date(d, lang=lang)
+    if lang == "te-IN":
+        return f"{when} check-in, {n} nights, {g} guests — ఇలా request పెట్టమంటారా?"
+    return f"{when} check-in, {n} nights, {g} guests — shall I note this request?"
+
+
+def outcome_after_booking(state: BookingState, lang: str) -> str:
+    d = _iso_or_none(state.check_in)
+    n = nights_count(state) or 0
+    g = state.guest_count or 0
+    when = spoken_stay_date(d, lang=lang) if d else "తేదీ"
+    if lang == "te-IN":
+        return (
+            f"Request note చేశాను అండి — {when}, {n} nights, {g} guests. "
+            "Availability confirm చేసి మా team మీకు call చేస్తారు."
+        )
+    return (
+        f"I've noted your request — {when}, {n} nights, {g} guests. "
+        "Our team will confirm availability and call you back."
+    )
+
+
+def slots_ready(state: BookingState, fields: dict) -> bool:
+    return not missing_booking_slots(state, fields)
+
+
+def set_slot_asked(state: BookingState, slot: str) -> BookingState:
+    state.last_slot_asked = slot
+    state.last_prompt = {
+        "check_in": "check_in",
+        "nights": "check_out",
+        "guests": "guests",
+        "confirm": "confirm_checkout",
+        "phone": "guests",
+    }.get(slot, slot)
+    return state
+
+
+def slot_verbal_yes(text: str, *, awaiting_confirm: bool) -> bool:
+    if confirmation_yes(text) is True:
+        return True
+    if not awaiting_confirm:
+        return False
+    raw = (text or "").strip()
+    low = raw.lower()
+    return any(
+        p in raw or p in low
+        for p in (
+            "అవును",
+            "అవునండి",
+            "ఇలాగే",
+            "పెట్టండి",
+            "పెట్టు",
+            "yes",
+            "confirm",
+            "సరే confirm",
+        )
+    )
+
+
+def slot_verbal_reject(text: str) -> bool:
+    if confirmation_yes(text) is False:
+        return True
+    raw = text or ""
+    if any(w in raw for w in ("వద్దు", "కాదు", "change", "మార్చు", "లేదు")):
+        if resolve_dates(raw, anchor=today_local()).nights or re.search(r"nights?|నైట్", raw, re.I):
+            return True
+    return False
+
+
+def llm_booking_turn_suffix(state: BookingState, fields: dict, lang: str) -> str:
+    nxt = next_missing_slot(state, fields) or "confirm"
+    if state.awaiting_confirmation:
+        return (
+            "[BOOKING_MODE: Answer any FACTS question in one short sentence. "
+            "If they confirm, say you are noting the request — do NOT read back dates yourself. "
+            "If they change nights/dates, acknowledge briefly only. "
+            "Do not call create_booking.]"
+        )
+    return (
+        f"[BOOKING_MODE: Answer caller question from FACTS only — never say మాకు X ఉంది unless FACTS list X. "
+        f"Then one short ack (noted / అలాగే అండి / ok అండి — vary, no repeat). "
+        f"Ask exactly ONE slot: {nxt}. No బుక్ చేస్తాం / check-in చేస్తాం before confirmation. "
+        f"Full weekday (ఆదివారం) + day + month. No create_booking.]"
+    )
+
+
+def append_missing_slot_if_needed(reply: str, fields: dict, lang: str) -> str:
+    st = load_booking(fields)
+    if st.awaiting_confirmation or st.booking_confirmed:
+        return reply
+    miss = next_missing_slot(st, fields)
+    if not miss:
+        return reply
+    ask = ask_line_for_slot(miss, lang, st)
+    if not ask:
+        return reply
+    low = (reply or "").lower()
+    if miss == "nights" and "night" in low:
+        return reply
+    if miss == "guests" and ("guest" in low or "మంది" in reply or "వస్తారు" in reply):
+        return reply
+    if miss == "check_in" and ("check-in" in low or "తేదీ" in reply):
+        return reply
+    return f"{(reply or '').strip()} {ask}".strip()
+
+
+def lodging_booking_call(fields: dict) -> bool:
+    from app.services.voice.inbound_vertical import inbound_vertical
+
+    if inbound_vertical(fields) == "lodging":
+        return True
+    brief = str(fields.get("employee_brief") or "").lower()
+    if any(k in brief for k in ("resort", "hotel", "farm stay", "v farms")):
+        return True
+    prof = fields.get("employee_business_profile")
+    if isinstance(prof, dict):
+        blob = json.dumps(prof, ensure_ascii=False).lower()
+        if "resort" in blob or "lodging" in blob:
+            return True
+    return False
+
+
+def lodging_slot_collecting(fields: dict, caller_text: str) -> bool:
+    from app.services.voice.booking_state import booking_intent_utterance
+    from app.services.voice.employee_playbook import booking_flow_active
+
+    if not booking_flow_active(fields):
+        return booking_intent_utterance(caller_text) or bool(load_booking(fields).check_in)
+    st = load_booking(fields)
+    return not st.booking_confirmed
+
+
+def handle_booking_slot_turn(
+    db,
+    call,
+    fields: dict,
+    caller_text: str,
+    lang: str,
+    last_agent_reply: str | None,
+    execute_tool_fn,
+    *,
+    miss_before: list[str] | None = None,
+) -> tuple[str | None, dict]:
+    """Code-rendered replies: read-back, re-read-back after correction, outcome only."""
+    if not lodging_booking_call(fields):
+        return None, fields
+    if not lodging_slot_collecting(fields, caller_text):
+        st = load_booking(fields)
+        if st.booking_confirmed:
+            return outcome_after_booking(st, lang), fields
+        return None, fields
+
+    if miss_before is None:
+        miss_before = missing_booking_slots(load_booking(fields), fields)
+    state = load_booking(fields)
+    text = caller_text or ""
+    interrupt = is_booking_interrupt(text)
+
+    if fields.pop("_slot_reject_reread", None):
+        state.awaiting_confirmation = True
+        state = set_slot_asked(state, "confirm")
+        fields[BOOKING_KEY] = dump_booking(state)
+        return confirmation_readback(state, lang), fields
+
+    if state.booking_confirmed:
+        return outcome_after_booking(state, lang), fields
+
+    if state.awaiting_confirmation and slots_ready(state, fields):
+        if slot_verbal_reject(text):
+            state = set_slot_asked(state, "confirm")
+            fields[BOOKING_KEY] = dump_booking(state)
+            return confirmation_readback(state, lang), fields
+        if slot_verbal_yes(text, awaiting_confirm=True):
+            if "create_booking" not in [str(x.get("name")) for x in (fields.get("tool_log") or [])]:
+                _, fields, _ = execute_tool_fn(
+                    "create_booking",
+                    {"confirmed_verbal": True},
+                    tool_source="slot_flow",
+                )
+                state = load_booking(fields)
+                state.booking_confirmed = True
+                state.awaiting_confirmation = False
+                fields[BOOKING_KEY] = dump_booking(state)
+            return outcome_after_booking(load_booking(fields), lang), fields
+        if interrupt:
+            return None, fields
+        state = set_slot_asked(state, "confirm")
+        fields[BOOKING_KEY] = dump_booking(state)
+        return confirmation_readback(state, lang), fields
+
+    miss_after = missing_booking_slots(state, fields)
+    just_filled = len(miss_before) > 0 and len(miss_after) == 0
+    if just_filled and not interrupt:
+        state.awaiting_confirmation = True
+        state = set_slot_asked(state, "confirm")
+        fields[BOOKING_KEY] = dump_booking(state)
+        return confirmation_readback(state, lang), fields
+
+    return None, fields
+
+
+def infer_capture_slot(text: str, state: BookingState, last_agent: str | None) -> str | None:
+    last = infer_last_slot_asked(last_agent or "", state)
+    if last == "nights" and is_people_count_utterance(text):
+        return "guests"
+    if resolve_dates(text, anchor=today_local()).check_in:
+        return "check_in"
+    if resolve_dates(text, anchor=today_local()).nights:
+        return "nights"
+    if is_people_count_utterance(text):
+        return "guests"
+    return None

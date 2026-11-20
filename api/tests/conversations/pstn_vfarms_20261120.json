@@ -1,0 +1,35 @@
+{
+  "meta": {
+    "call_id": "bfa66903-3ff0-435e-9d80-71ee776e9ca9",
+    "voice_trace_id": "fe440afa-b8ba-4d88-ab7a-0f598292cd39",
+    "anchor_date": "2026-11-20",
+    "timezone": "Asia/Kolkata",
+    "employee_brief": "Your name is Maya for V Farms Resort.",
+    "profile_fixture": "vfarms_profile.json"
+  },
+  "turns": [
+    {"turn": 1, "caller": "అర్థం కాలే, ఏం చెప్పారు? ఏ record అని చెప్పారు?", "agent": "అయ్యో సారీ అండి, ఏదో confusion అయినట్టుంది. నేను Maya ని, V Farms Resort front desk నుంచి మాట్లాడుతున్నా. మేము Medchal దగ్గర ఐదు ఎకరాల farm stay నడుపుతున్నాం. మీకు stay గురించి ఏమైనా తెలుసుకోవాలా?"},
+    {"turn": 2, "caller": "ఏం పేరండి?", "agent": "నా పేరు Maya అండి. మేము V Farms Resort నుంచి మాట్లాడుతున్నాం. ఇది Medchal దగ్గర ఉన్న farm stay. మీకు ఇక్కడ stay కావాలా?"},
+    {"turn": 3, "caller": "Okay, మీది ఏ time నుంచి ఏ time వరకు opening ఉంటుంది?", "agent": "మా resort ఉదయం 9 గంటల నుంచి రాత్రి 9 గంటల వరకు open ఉంటుంది అండి. మీకు ఇక్కడ stay కావాలంటే check-in date చెప్తారా?"},
+    {"turn": 4, "caller": "ఆ చెప్తాను 1 నిమిషం. అట్లనే నాకు కొద్దిగా మీ resort-లో ఏమేమి ఉంటాయో చెప్పగలవా?", "agent": "తప్పకుండా అండి. మాకు dragon fruit orchards, open skies తో పాటు ఐదు ఎకరాల farm stay ఉంది. మీరు stay కి వచ్చినప్పుడు ఈ farm అందాలు బాగా enjoy చేయొచ్చు. మరి మీ check-in date ఎప్పుడు అనుకుంటున్నారు?"},
+    {"turn": 5, "caller": "Checking date వచ్చేసి నేను ఎల్లుండి వద్దామనుకుంటున్నాను.", "agent": "సరే అండి, ఎల్లుండి అంటే ఈ బుధవారం కదా? మరి check-out date ఎప్పుడు పెట్టుకుందాం? అలాగే ఎంతమంది guests వస్తారు?"},
+    {"turn": 6, "caller": "ఎల్లుండి అంటే బుధవారం కదా, ఆదివారం కదా?", "agent": "అవునండి, బుధవారం కదా. ఈ బుధవారం check-in, ఆదివారం check-out అనుకుంటున్నారా? అలాగే ఎంతమంది guests వస్తారు?"},
+    {"turn": 7, "caller": "ఎల్లుండి బుధవారం కాదు ఆదివారం కదా బుధవారం అని చెప్తున్నావేంది అంటున్నాను.", "agent": "Sorry అండి, చిన్న confusion అయింది. ఈ రోజు నుంచి లెక్కపెడితే ఎల్లుండి బుధవారం అవుతుంది. మీరు బుధవారం check-in, ఆదివారం check-out అనుకుంటున్నారా? మరి ఎంతమంది guests వస్తారు?"},
+    {"turn": 8, "caller": "4 వస్తారు.", "agent": "క్షమించండి అండి, మరోసారి చెప్పగలరా?"},
+    {"turn": 9, "caller": "నలుగురు four members.", "agent": "క్షమించండి అండి, మరోసారి చెప్పగలరా?"},
+    {"turn": 10, "caller": "4-గురం వస్తాము.", "agent": "అవునండి, 4 guests. ఒకసారి confirm చేస్తాను, బుధవారం December 4th check-in, ఆదివారం December 7th check-out కదా?"},
+    {"turn": 11, "caller": "ఆ అంతే.", "agent": "క్షమించండి అండి, మరోసారి చెప్పగలరా?"},
+    {"turn": 12, "caller": "ఆ అంతే book చేయండి.", "agent": "క్షమించండి అండి, మరోసారి చెప్పగలరా?"},
+    {"turn": 13, "caller": "ఏం చెప్పాలి?", "agent": "క్షమించండి అండి, మరోసారి చెప్పగలరా?"},
+    {"turn": 14, "caller": "అదే దేని గురించి చెప్పాలి అంటున్నాను?", "agent": "క్షమించండి అండి, మరోసారి చెప్పగలరా?"},
+    {"turn": 15, "caller": "ఓసేయ్ దేని గురించి చెప్పాలి చెప్పే ఈ మరోసారి చెప్పు మరోసారి చెప్పు అంటే దేని గురించి చెప్తావు చదువుతా కదూ చెప్పేది?", "agent": "We have covered a lot. Thank you for calling. Goodbye!"},
+    {"turn": 16, "caller": "అప్పుడే good bye book చేశానో book చేయలేదో చెప్పు.", "agent": "We have covered a lot. Thank you for calling. Goodbye!"},
+    {"turn": 17, "caller": "ఏం అర్థం కాలే. We have a God, అర్థం కాలే.", "agent": "We have covered a lot. Thank you for calling. Goodbye!"}
+  ],
+  "expectations": {
+    "check_in": "2026-11-22",
+    "guest_count": 4,
+    "forbid_agent_substrings": ["మరోసారి చెప్పగలరా", "We have covered a lot", "December 4"],
+    "require_final_substrings": ["booking", "request", "note", "confirm"]
+  }
+}

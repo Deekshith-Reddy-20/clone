@@ -1,0 +1,10 @@
+{
+  "test_only": true,
+  "business": {"name": "Wayfinder Greens", "type": "real_estate", "one_line_pitch": "Gated plots near Shamshabad."},
+  "location": {"full_address": "Shamshabad, Hyderabad, Telangana", "area": "Shamshabad", "city": "Hyderabad", "state": "Telangana"},
+  "contact": {"reception_phone": "04000002002"},
+  "offerings": [{"name": "Residential plot", "description": "200 sq yd plots", "price_from": 4500000, "price_unit": "per plot", "price_notes": "fixture only"}],
+  "usps": ["Near airport ORR"],
+  "unknown_policy": "callback",
+  "sources": [{"url": "invented", "page": "realestate_fixture", "field": "manual"}]
+}

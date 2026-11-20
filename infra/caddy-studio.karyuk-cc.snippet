@@ -1,0 +1,34 @@
+# Optional: trusted TLS for the workspace UI (no cert warning).
+# DNS: studio.karyuk.wayfinderops.com → same host as karyuk.wayfinderops.com
+# Append this block to /etc/caddy/Caddyfile, then: caddy reload --config /etc/caddy/Caddyfile
+
+studio.karyuk.wayfinderops.com {
+	handle /v1/* {
+		reverse_proxy 127.0.0.1:8010 {
+			header_up -Cookie
+			header_up -X-Forwarded-For
+			header_up -X-Forwarded-Host
+			header_up -X-Forwarded-Proto
+			header_up -X-Forwarded-Server
+			header_up -Via
+			header_up -Referer
+			header_up -X-Real-Ip
+			header_up -X-Request-Id
+			header_up -Sec-Ch-Ua
+			header_up -Sec-Ch-Ua-Mobile
+			header_up -Sec-Ch-Ua-Platform
+			header_up -Sec-Fetch-Dest
+			header_up -Sec-Fetch-Mode
+			header_up -Sec-Fetch-Site
+		}
+	}
+	handle /health {
+		reverse_proxy 127.0.0.1:8010
+	}
+	handle {
+		reverse_proxy 127.0.0.1:5173 {
+			header_up Host {host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+}

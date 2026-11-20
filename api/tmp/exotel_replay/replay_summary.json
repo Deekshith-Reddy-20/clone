@@ -1,0 +1,11 @@
+[
+  {
+    "lang": "te",
+    "mode": "mock",
+    "stt_turns": 2,
+    "outbound_media": 2,
+    "outbound_pcm_bytes": 12800,
+    "elapsed_s": 7.31,
+    "ok": true
+  }
+]

@@ -1,0 +1,33 @@
+# Phase G seed — V Farms production failure transcript (section 1)
+employee:
+  brief: "Your name is Maya for V Farms Resort."
+  facts: |
+    V Farms Resort near Medchal, Telangana, about 28 km from Hyderabad city center.
+    Landmarks: ORR Medchal exit. Reception phone: 04045900002. Check-in 2pm, check-out 11am.
+    Rooms from Rs 3500 per night (weekday), weekend packages on website.
+turns:
+  - caller: "ఏ resort?"
+    forbid_substrings:
+      - "Your name is"
+      - "గురించి:"
+      - "Use the live booking"
+  - caller: "Okay, మీ location చెప్పగలవా?"
+    forbid_substrings:
+      - "Telangana.."
+      - "Your name is"
+    require_any:
+      - "Medchal"
+  - caller: "తెలంగాణలో ఎక్కడ?"
+    forbid_substrings:
+      - "Telangana.."
+  - caller: "అదే Telangana-లో ఎక్కడ ఉంది మీది property?"
+    require_any:
+      - "Medchal"
+  - caller: "సరే, మీ దాంట్లో prices చెప్పగలరా కొద్దిగా?"
+    forbid_substrings:
+      - "live booking system"
+      - "Your name is"
+  - caller: "Okay, prices చెప్పు. అంటే 1 night-కి ఎంత charge చేస్తారు మీ resort-లో?"
+    forbid_substrings:
+      - "Your name is"
+      - "గురించి:"

@@ -1,0 +1,175 @@
+{
+  "suites": [
+    {
+      "id": "vfarms_resort",
+      "vertical": "lodging",
+      "brief": "Your name is Maya for V Farms Resort.",
+      "profile_fixture": "vfarms_profile.json",
+      "turns": [
+        {"caller": "ఏ resort?", "max_words": 30},
+        {"caller": "Okay, మీ location చెప్పగలవా?", "forbid_substrings": ["Telangana.."]},
+        {"caller": "తెలంగాణలో ఎక్కడ?", "require_new_detail": true},
+        {"caller": "prices చెప్పండి", "max_words": 32},
+        {
+          "caller": "ఈ శనివారం check-in అవుతుందా?",
+          "forbid_tool_any": ["create_booking"],
+          "max_words": 40
+        },
+        {
+          "caller": "book చేయండి dates 24 to 28",
+          "forbid_tool_any": ["create_booking"],
+          "max_words": 40
+        }
+      ]
+    },
+    {
+      "id": "vfarms_manager",
+      "vertical": "lodging",
+      "brief": "Your name is Maya for V Farms Resort.",
+      "profile_fixture": "vfarms_profile.json",
+      "turns": [
+        {"caller": "manager తో మాట్లాడాలి", "expect_tool_any": ["transfer_to_human"]}
+      ]
+    },
+    {
+      "id": "vfarms_unknown",
+      "vertical": "lodging",
+      "brief": "Your name is Maya for V Farms Resort.",
+      "profile_fixture": "vfarms_profile.json",
+      "turns": [
+        {
+          "caller": "helipad ఉందా మీ దగ్గర?",
+          "expect_tool_any": ["save_lead"],
+          "forbid_substrings": ["helipad లేదు", "మాకు helipad"]
+        }
+      ]
+    },
+    {
+      "id": "vfarms_english",
+      "vertical": "lodging",
+      "brief": "Your name is Maya for V Farms Resort.",
+      "profile_fixture": "vfarms_profile.json",
+      "turns": [
+        {"caller": "Please reply in English only — where are you located?"},
+        {"caller": "Nice place, thanks for explaining."}
+      ]
+    },
+    {
+      "id": "vfarms_compliment",
+      "vertical": "lodging",
+      "brief": "Your name is Maya for V Farms Resort.",
+      "profile_fixture": "vfarms_profile.json",
+      "turns": [{"caller": "మీ resort చాలా బాగుంది అండి"}]
+    },
+    {
+      "id": "realestate_visit",
+      "vertical": "general",
+      "brief": "Reception for Wayfinder Greens plots.",
+      "profile_fixture": "real_estate_profile.json",
+      "turns": [
+        {"caller": " plots ఎంత?", "max_words": 32},
+        {
+          "caller": "site visit ఇవ్వండి next weekend",
+          "expect_tool_any": ["check_availability", "save_lead"],
+          "tool_sources_ok": ["llm_native", "safety_net", "intent_layer"]
+        }
+      ]
+    },
+    {
+      "id": "realestate_manager",
+      "vertical": "general",
+      "brief": "Reception for Wayfinder Greens plots.",
+      "profile_fixture": "real_estate_profile.json",
+      "turns": [{"caller": "talk to sales manager please", "expect_tool_any": ["transfer_to_human"]}]
+    },
+    {
+      "id": "college_fee",
+      "vertical": "general",
+      "brief": "You are Anitha college admissions desk.",
+      "profile_fixture": "college_profile.json",
+      "turns": [
+        {"caller": "CSE fee ఎంత?", "max_words": 32},
+        {
+          "caller": "campus visit కావాలి",
+          "expect_tool_any": ["save_lead", "check_availability"],
+          "tool_sources_ok": ["llm_native", "safety_net", "intent_layer"]
+        }
+      ]
+    },
+    {
+      "id": "college_english",
+      "vertical": "general",
+      "brief": "You are Anitha college admissions desk.",
+      "profile_fixture": "college_profile.json",
+      "turns": [{"caller": "What are batch timings for CSE?"}]
+    },
+    {
+      "id": "college_unknown",
+      "vertical": "general",
+      "brief": "You are Anitha college admissions desk.",
+      "profile_fixture": "college_profile.json",
+      "turns": [
+        {
+          "caller": "MBA aviation course ఉందా?",
+          "expect_tool_any": ["save_lead"],
+          "forbid_substrings": ["aviation లేదు", "course లేదు"]
+        }
+      ]
+    },
+    {
+      "id": "vfarms_booking_happy",
+      "vertical": "lodging",
+      "brief": "Your name is Maya for V Farms Resort.",
+      "profile_fixture": "vfarms_profile.json",
+      "turns": [
+        {"caller": "ఎల్లుండి check-in", "max_words": 40},
+        {"caller": "4 వస్తారు", "max_words": 40},
+        {"caller": "2 nights", "max_words": 45},
+        {
+          "caller": "అవును, ఇలాగే పెట్టండి",
+          "expect_tool_any": ["create_booking"],
+          "tool_sources_ok": ["llm_native", "slot_flow", "safety_net"],
+          "max_words": 55
+        }
+      ]
+    },
+    {
+      "id": "vfarms_repeat_location",
+      "vertical": "lodging",
+      "brief": "Your name is Maya for V Farms Resort.",
+      "profile_fixture": "vfarms_profile.json",
+      "turns": [
+        {"caller": "location చెప్పు", "max_words": 32},
+        {"caller": "మళ్ళీ directions చెప్పు", "require_new_detail": true}
+      ]
+    },
+    {
+      "id": "realestate_unknown",
+      "vertical": "general",
+      "brief": "Reception for Wayfinder Greens plots.",
+      "profile_fixture": "real_estate_profile.json",
+      "turns": [
+        {
+          "caller": "RERA approval number చెప్పండి",
+          "expect_tool_any": ["save_lead"],
+          "tool_sources_ok": ["llm_native", "safety_net", "intent_layer"],
+          "forbid_substrings": ["rera లేదు", "no rera"]
+        }
+      ]
+    },
+    {
+      "id": "college_compliment",
+      "vertical": "general",
+      "brief": "You are Anitha college admissions desk.",
+      "profile_fixture": "college_profile.json",
+      "turns": [{"caller": "మీ college campus చాలా బాగుంది"}]
+    },
+    {
+      "id": "vfarms_end",
+      "vertical": "lodging",
+      "brief": "Your name is Maya for V Farms Resort.",
+      "profile_fixture": "vfarms_profile.json",
+      "turns": [{"caller": "అంతే చాలు thank you"}]
+    }
+  ]
+}

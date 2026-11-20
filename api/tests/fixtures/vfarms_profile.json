@@ -1,0 +1,47 @@
+{
+  "test_only": true,
+  "business": {
+    "name": "V Farms Resort",
+    "type": "resort",
+    "one_line_pitch": "Weekend resort near Medchal with farm-stay vibe."
+  },
+  "location": {
+    "full_address": "V Farms Resort, Medchal, Telangana 501401",
+    "area": "Medchal",
+    "city": "Hyderabad",
+    "state": "Telangana",
+    "landmarks": ["ORR Medchal exit"],
+    "distance_from": [
+      {"place": "Hyderabad city center", "km": 28, "drive_time": "45 min"}
+    ],
+    "maps_link": ""
+  },
+  "contact": {
+    "reception_phone": "04045900002",
+    "whatsapp": "",
+    "email": "",
+    "hours": ""
+  },
+  "offerings": [
+    {
+      "name": "Standard room",
+      "description": "AC room for couples and families",
+      "capacity": "",
+      "price_from": 3500,
+      "price_unit": "per night",
+      "price_notes": "Weekday indicative; confirm dates for exact rate"
+    }
+  ],
+  "amenities": ["Swimming pool", "Indoor games"],
+  "policies": {
+    "check_in": "2 PM",
+    "check_out": "11 AM"
+  },
+  "offers": [],
+  "usps": ["Close to ORR Medchal exit", "Farm-stay atmosphere"],
+  "faqs": [],
+  "objection_handling": [],
+  "unknown_policy": "callback",
+  "sources": [{"url": "seed", "page": "vfarms_fixture", "field": "manual"}],
+  "profile_version": 1
+}

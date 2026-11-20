@@ -1,0 +1,10 @@
+.env
+**/.venv/
+**/.venv.win/
+**/node_modules/
+**/dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+scripts/out/
+api/reports/

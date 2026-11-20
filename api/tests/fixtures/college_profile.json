@@ -1,0 +1,10 @@
+{
+  "test_only": true,
+  "business": {"name": "Anitha Junior College", "type": "college", "one_line_pitch": "CSE and degree programs with campus visits."},
+  "location": {"full_address": "Test Campus, Gachibowli, Hyderabad", "area": "Gachibowli", "city": "Hyderabad", "state": "Telangana", "landmarks": [], "distance_from": []},
+  "contact": {"reception_phone": "04000001001", "hours": "Mon–Sat 9 AM – 5 PM"},
+  "offerings": [{"name": "CSE", "description": "Computer Science Engineering", "price_from": 120000, "price_unit": "per year", "price_notes": "fixture only"}],
+  "faqs": [{"q": "CSE fee?", "a": "Around 1.2 lakh per year on the website brochure (fixture)."}],
+  "unknown_policy": "callback",
+  "sources": [{"url": "invented", "page": "college_fixture", "field": "manual"}]
+}

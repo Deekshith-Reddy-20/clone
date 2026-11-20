@@ -1,0 +1,25 @@
+# Paste into karyuk.wayfinderops.com { } in /root/karyuk/infra/Caddyfile (before catch-all → :3000).
+# Reload: docker exec karyuk-caddy-1 caddy reload --config /etc/caddy/Caddyfile
+
+	handle /v1/* {
+		reverse_proxy 127.0.0.1:8010 {
+			header_up -Cookie
+			header_up -X-Forwarded-For
+			header_up -X-Forwarded-Host
+			header_up -X-Forwarded-Proto
+			header_up -X-Forwarded-Server
+			header_up -Via
+			header_up -Referer
+			header_up -X-Real-Ip
+			header_up -X-Request-Id
+			header_up -Sec-Ch-Ua
+			header_up -Sec-Ch-Ua-Mobile
+			header_up -Sec-Ch-Ua-Platform
+			header_up -Sec-Fetch-Dest
+			header_up -Sec-Fetch-Mode
+			header_up -Sec-Fetch-Site
+		}
+	}
+	handle /health {
+		reverse_proxy 127.0.0.1:8010
+	}

@@ -1,0 +1,92 @@
+{
+  "suites": [
+    {
+      "id": "neg_booking_how",
+      "brief": "Your name is Maya for V Farms Resort.",
+      "profile_fixture": "vfarms_profile.json",
+      "turns": [
+        {
+          "caller": "booking ఎలా చేయాలి?",
+          "forbid_tool_any": ["create_booking", "transfer_to_human", "check_availability"]
+        }
+      ]
+    },
+    {
+      "id": "neg_booking_past",
+      "brief": "Your name is Maya for V Farms Resort.",
+      "profile_fixture": "vfarms_profile.json",
+      "turns": [
+        {
+          "caller": "last time I booked here it was nice",
+          "forbid_tool_any": ["create_booking", "transfer_to_human"]
+        }
+      ]
+    },
+    {
+      "id": "neg_manager_who",
+      "brief": "Your name is Maya for V Farms Resort.",
+      "profile_fixture": "vfarms_profile.json",
+      "turns": [
+        {
+          "caller": "manager ఎవరు?",
+          "forbid_tool_any": ["transfer_to_human"]
+        }
+      ]
+    },
+    {
+      "id": "neg_manager_name_en",
+      "brief": "Reception for Wayfinder Greens plots.",
+      "profile_fixture": "real_estate_profile.json",
+      "turns": [
+        {
+          "caller": "who is the sales manager?",
+          "forbid_tool_any": ["transfer_to_human"]
+        }
+      ]
+    },
+    {
+      "id": "neg_visit_how",
+      "brief": "Reception for Wayfinder Greens plots.",
+      "profile_fixture": "real_estate_profile.json",
+      "turns": [
+        {
+          "caller": "site visit ఎలా book చేయాలి?",
+          "forbid_tool_any": ["create_booking", "check_availability"]
+        }
+      ]
+    },
+    {
+      "id": "neg_booking_procedure",
+      "brief": "Your name is Maya for V Farms Resort.",
+      "profile_fixture": "vfarms_profile.json",
+      "turns": [
+        {
+          "caller": "what is the booking process?",
+          "forbid_tool_any": ["create_booking", "check_availability"]
+        }
+      ]
+    },
+    {
+      "id": "neg_manager_role",
+      "brief": "You are Anitha college admissions desk.",
+      "profile_fixture": "college_profile.json",
+      "turns": [
+        {
+          "caller": "manager అంటే ఏమిటి?",
+          "forbid_tool_any": ["transfer_to_human"]
+        }
+      ]
+    },
+    {
+      "id": "neg_past_weekend",
+      "brief": "Your name is Maya for V Farms Resort.",
+      "profile_fixture": "vfarms_profile.json",
+      "turns": [
+        {
+          "caller": "ముందు weekend visit చేశాను చాలా బాగుంది",
+          "forbid_tool_any": ["create_booking", "check_availability", "transfer_to_human"]
+        }
+      ]
+    }
+  ]
+}
