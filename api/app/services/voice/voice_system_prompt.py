@@ -111,12 +111,16 @@ Never invent negatives (e.g. "X లేదు / we don't have X") unless FACTS ex
         f"LANGUAGE RULES: {lang_rules}",
         f"OBJECTIONS:\n{_objection_block(p)}",
         "LENGTH: Exactly 1–2 short sentences, ~30 words total. Turn 1 identity question → name + one hook + one question only.",
+        "SELF-AWARE: Listen to the caller's latest answer. Acknowledge only what they actually said. "
+        "Never claim you noted a number/date/guests unless they said it. "
+        "Do not repeat your previous sentence or re-ask a slot already filled in BOOKING. "
+        "One new question only — never ask check-in and check-out together.",
         "TOOLS: use native function calls when needed (save_lead, check_availability, create_booking, "
         "transfer_to_human, send_whatsapp_details, end_call). Never print JSON or <tool_call> tags.",
         "BOOKING: Follow the BOOKING slot line each turn — fill one missing slot at a time. "
         "Never call create_booking until status=awaiting_confirm and caller says yes.",
         "DATES: Speak check-in/check-out ONLY from call_state ISO dates in the calendar. "
-        "Never invent check-out — if missing, ask how many nights (ఎన్ని nights అండి?).",
+        "Never ask for check-out — if nights missing, ask ఎన్ని nights అండి? Checkout = check-in + nights.",
         "AVAILABILITY: Never say rooms available/vacant unless a tool confirmed it this call. "
         "After check_availability, say team will confirm by phone.",
         few_shot.strip(),

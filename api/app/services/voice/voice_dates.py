@@ -220,9 +220,11 @@ def apply_resolved_dates_to_booking(fields: dict, caller_text: str, *, anchor: d
     if resolved.check_out:
         st.check_out = resolved.check_out
         st.check_out_day = date.fromisoformat(resolved.check_out).day
-    if resolved.nights and st.check_in and not st.check_out:
-        ci = date.fromisoformat(st.check_in)
-        st.check_out = (ci + timedelta(days=resolved.nights)).isoformat()
-        st.check_out_day = date.fromisoformat(st.check_out).day
+    if resolved.nights:
+        st.nights = resolved.nights
+        if st.check_in:
+            ci = date.fromisoformat(st.check_in)
+            st.check_out = (ci + timedelta(days=resolved.nights)).isoformat()
+            st.check_out_day = date.fromisoformat(st.check_out).day
     fields[BOOKING_KEY] = dump_booking(st)
     return fields

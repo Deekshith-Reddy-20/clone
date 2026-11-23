@@ -7,8 +7,12 @@ import re
 _SENTENCE_END = ".!?।"
 
 
-def cap_spoken_reply(text: str, *, max_chars: int = 220) -> str:
-    """Shorten only at a finished sentence. Never slice a word."""
+def cap_spoken_reply(text: str, *, max_chars: int = 160) -> str:
+    """Shorten only at a finished sentence. Never slice a word.
+
+    Phone turns feel natural when the agent stops after 1–2 short sentences so
+    the caller can answer without talking over long TTS.
+    """
     t = (text or "").strip()
     if not t or len(t) <= max_chars:
         return t
@@ -17,7 +21,7 @@ def cap_spoken_reply(text: str, *, max_chars: int = 220) -> str:
     if not complete:
         return t
     chosen: list[str] = []
-    for sentence in complete:
+    for sentence in complete[:2]:
         candidate = " ".join([*chosen, sentence]).strip()
         if len(candidate) <= max_chars:
             chosen.append(sentence)
@@ -28,7 +32,7 @@ def cap_spoken_reply(text: str, *, max_chars: int = 220) -> str:
     return " ".join(chosen).strip()
 
 
-def enforce_brevity(text: str, *, max_words: int = 30, max_sentences: int = 2) -> tuple[str, bool]:
+def enforce_brevity(text: str, *, max_words: int = 24, max_sentences: int = 2) -> tuple[str, bool]:
     """Returns (trimmed_text, needs_regenerate). Never chops mid-sentence."""
     t = (text or "").strip()
     if not t:

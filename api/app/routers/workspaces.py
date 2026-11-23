@@ -13,13 +13,17 @@ from app.services.workspaces import accept_invite, create_invite, create_workspa
 router = APIRouter(prefix="/v1", tags=["workspaces"])
 
 
+def _role_value(role: MembershipRole | str) -> str:
+    return role.value if isinstance(role, MembershipRole) else str(role)
+
+
 @router.get("/workspaces", response_model=list[WorkspaceOut])
 def list_workspaces(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[WorkspaceOut]:
     return [
-        WorkspaceOut(id=w.id, name=w.name, role=role.value, created_at=w.created_at)
+        WorkspaceOut(id=w.id, name=w.name, role=_role_value(role), created_at=w.created_at)
         for w, role in list_workspaces_for_user(db, user.id)
     ]
 
@@ -34,7 +38,7 @@ def create_workspace(
     return WorkspaceOut(
         id=workspace.id,
         name=workspace.name,
-        role=membership.role.value,
+        role=_role_value(membership.role),
         created_at=workspace.created_at,
     )
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import os
 import re
 import time
 import wave
@@ -380,18 +381,19 @@ def avoid_repeat_reply(
     *,
     booking_active: bool = False,
 ) -> str:
-    """Same words twice get a short new sentence of the same reply.
-
-    A booking status repeat stays the real state. It is never rewritten into
-    a dates-and-people recap.
-    """
-    if not last_reply or not reply or reply.strip() != last_reply.strip():
+    """If we would say the exact same line again, shorten — don't stack a repeat preface."""
+    if not last_reply or not reply:
         return reply
+    a = re.sub(r"\s+", " ", reply.strip().lower())
+    b = re.sub(r"\s+", " ", last_reply.strip().lower())
+    if a != b:
+        return reply
+    # Identical to last turn — one short nudge, no re-reading the whole line.
     if _has_telugu_script(reply):
-        return f"మళ్ళీ చెప్తాను అండి. {reply.strip()}"
+        return "సరే అండి — మరోసారి చెప్తారా?"
     if _has_devanagari_script(reply):
-        return f"फिर से बता देता हूँ जी। {reply.strip()}"
-    return f"Again — {reply.strip()}"
+        return "ठीक है — एक बार फिर बताएँगे?"
+    return "Sure — could you say that once more?"
 
 
 def _normalize_detected_lang(code: str | None, fallback: str) -> str:
@@ -569,41 +571,35 @@ def transcribe_pcm(
     hint_language: str = "en-IN",
     settings: Settings | None = None,
 ) -> tuple[str, str]:
-    """Exotel 8 kHz mono PCM → (transcript, detected_bcp47)."""
+    """Exotel 8 kHz mono PCM → (transcript, detected_bcp47).
+
+    Prefer REST STT. Streaming WS can hang on connect and starve the PSTN
+    worker thread pool (callers hear greeting then no replies).
+    """
     s = settings or get_settings()
     fallback = _normalize_detected_lang(hint_language, "en-IN")
     if not sarvam_configured(s) or len(pcm) < 1600:
         return "", fallback
 
-    from app.services.voice.sarvam_streaming import transcribe_pcm_streaming
-
-    t0_ws = time.perf_counter()
-    ws_text, ws_lang = transcribe_pcm_streaming(pcm, hint_language=fallback)
-    if ws_text.strip():
-        logger.info(
-            "Sarvam STT path=ws_stream ms=%.0f bytes=%d",
-            (time.perf_counter() - t0_ws) * 1000,
-            len(pcm),
-        )
-        return ws_text.strip(), ws_lang
-
     wav_bytes = pcm_to_wav_bytes(pcm)
     t0_rest = time.perf_counter()
+    lang_hint = fallback if fallback in SUPPORTED_BCP47 else "unknown"
     try:
         result = _client().speech_to_text.transcribe(
             file=("caller.wav", wav_bytes, "audio/wav"),
             model=STT_MODEL,
             mode="codemix",
-            language_code="unknown",
+            language_code=lang_hint,
         )
         text = (result.transcript or "").strip()
         lang = _normalize_detected_lang(result.language_code, fallback)
+        logger.info(
+            "Sarvam STT path=rest ms=%.0f bytes=%d text_len=%d",
+            (time.perf_counter() - t0_rest) * 1000,
+            len(pcm),
+            len(text),
+        )
         if text:
-            logger.info(
-                "Sarvam STT path=rest ms=%.0f bytes=%d",
-                (time.perf_counter() - t0_rest) * 1000,
-                len(pcm),
-            )
             return text, lang
     except Exception as exc:
         if _quota_error(exc):
@@ -619,6 +615,28 @@ def transcribe_pcm(
             code or "unknown",
             type(exc).__name__,
         )
+
+    # Optional WS fallback (off by default — connect can hang indefinitely).
+    if os.getenv("SARVAM_STT_WS", "").strip().lower() in ("1", "true", "on", "yes"):
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+        from app.services.voice.sarvam_streaming import transcribe_pcm_streaming
+
+        t0_ws = time.perf_counter()
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(transcribe_pcm_streaming, pcm, hint_language=fallback)
+                ws_text, ws_lang = fut.result(timeout=8.0)
+            if ws_text.strip():
+                logger.info(
+                    "Sarvam STT path=ws_stream ms=%.0f bytes=%d",
+                    (time.perf_counter() - t0_ws) * 1000,
+                    len(pcm),
+                )
+                return ws_text.strip(), ws_lang
+        except FuturesTimeout:
+            logger.warning("Sarvam STT WS timed out after 8s; skipping")
+        except Exception as exc:
+            logger.warning("Sarvam STT WS failed err=%s", type(exc).__name__)
 
     return "", fallback
 

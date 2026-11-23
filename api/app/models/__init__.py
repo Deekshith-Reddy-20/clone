@@ -3,7 +3,12 @@ from app.models.call_turn_event import CallTurnEvent
 from app.models.employee import Employee, EmployeeDraft, EmployeeVersion
 from app.models.identity import Invite, Membership, User, Workspace
 from app.models.enums import MembershipRole
-from app.models.outpero import OutperoAgent, OutperoSyncLog, OutperoWebhookEvent
+from app.models.outpero import (
+    OutperoAgent,
+    OutperoInboundConnection,
+    OutperoSyncLog,
+    OutperoWebhookEvent,
+)
 from app.models.platform import (
     AuditEvent,
     Call,
@@ -23,6 +28,7 @@ from app.models.platform import (
     WebhookEndpoint,
     WorkspaceSettings,
 )
+from app.models.vfarms import VfarmsAvailabilityActivity, VfarmsBookingAttempt, VfarmsStayQuote
 
 __all__ = [
     "User",
@@ -51,8 +57,12 @@ __all__ = [
     "AuditEvent",
     "Notification",
     "OutperoAgent",
+    "OutperoInboundConnection",
     "OutperoWebhookEvent",
     "OutperoSyncLog",
     "VoiceBookingRequest",
     "CallTurnEvent",
+    "VfarmsStayQuote",
+    "VfarmsBookingAttempt",
+    "VfarmsAvailabilityActivity",
 ]

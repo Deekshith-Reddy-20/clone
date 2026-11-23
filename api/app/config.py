@@ -84,6 +84,23 @@ class Settings(BaseSettings):
     outpero_default_workspace_id: str = ""  # defaults to first workspace if empty
     # When true and an active agent exists, Instant/Team outbound uses Outpero (skips Exotel KYC).
     outpero_prefer_outbound: bool = True
+    # Phase-1 inbound call.ended import (Harish → Calls). Off in labeled production.
+    outpero_inbound_import_enabled: bool = False
+    outpero_inbound_webhook_secret: str = ""  # optional env secret for staging connection
+    outpero_inbound_did_e164: str = ""  # approved inbound DID bound to staging connection
+    outpero_inbound_connection_key: str = "harish-staging"
+    # Staging only: accept deliveries that omit signing headers (some Test Send paths).
+    # Never bypass when a signature header is present but wrong.
+    outpero_inbound_accept_unsigned: bool = False
+    karyuk_deployment: str = ""  # set to production to force-disable inbound import
+
+    # V-Farms (vfarms.in) authoritative booking APIs — staging voice actions
+    vfarms_api_base_url: str = "https://vfarms.in"
+    vfarms_checkout_url: str = "https://vfarms.in/#book"
+    vfarms_quote_ttl_seconds: int = 900
+    # Writes (hold/confirm) stay off until operator approves real reservations.
+    vfarms_booking_writes_enabled: bool = False
+    vfarms_actions_enabled: bool = True
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -16,7 +16,7 @@ from app.auth.deps import get_workspace_membership
 from app.config import get_settings
 from app.database import SessionLocal, get_db
 from app.models import Call, Lead, Membership
-from app.models.outpero import OutperoAgent, OutperoSyncLog, OutperoWebhookEvent
+from app.models.outpero import OutperoAgent, OutperoInboundConnection, OutperoSyncLog, OutperoWebhookEvent
 from app.services.outpero.agents import (
     agent_stats,
     create_agent,
@@ -29,7 +29,16 @@ from app.services.outpero.agents import (
     update_agent,
 )
 from app.services.outpero.client import OutperoApiError
-from app.services.outpero.signatures import verify_outpero_signature
+from app.services.outpero.inbound_import import (
+    allowlisted_payload,
+    connection_signing_secret,
+    durable_event_key,
+    inbound_import_enabled,
+    process_inbound_call_ended,
+    resolve_inbound_connection,
+    validate_binding,
+)
+from app.services.outpero.signatures import diagnose_outpero_signature, verify_outpero_signature
 from app.services.outpero.sync import build_event_key, process_call_ended_payload
 
 logger = logging.getLogger(__name__)
@@ -69,6 +78,49 @@ class LeadContextRequest(BaseModel):
     phone: str
 
 
+class CheckStayAvailabilityRequest(BaseModel):
+    check_in: str | None = None
+    check_out: str | None = None
+    guest_count: int | None = None
+    # Outpero variable aliases
+    checkIn: str | None = None
+    checkOut: str | None = None
+    guests: int | None = None
+    adults: int | None = None
+    # Optional verified association to an imported Outpero call (never inferred from summary).
+    call_id: str | None = None
+    provider_call_id: str | None = None
+    providerCallId: str | None = None
+    outpero_call_id: str | None = None
+
+
+class CreateStayReservationRequest(BaseModel):
+    quote_ref: str | None = None
+    quoteRef: str | None = None
+    guest_name: str | None = None
+    guest_email: str | None = None
+    guest_phone: str | None = None
+    guestName: str | None = None
+    guestEmail: str | None = None
+    guestPhone: str | None = None
+    attempt_key: str | None = None
+    attemptKey: str | None = None
+    caller_confirmed: bool = False
+    callerConfirmed: bool | None = None
+    confirm: bool | None = None
+
+
+class CreateStaffFollowupRequest(BaseModel):
+    reason: str | None = None
+    details: dict[str, Any] | None = None
+    caller_phone: str | None = None
+    phone: str | None = None
+    check_in: str | None = None
+    check_out: str | None = None
+    guest_count: int | None = None
+    notes: str | None = None
+
+
 def _serialize_lead(lead: Lead) -> dict[str, Any]:
     return {
         "id": lead.id,
@@ -92,10 +144,57 @@ def _serialize_lead(lead: Lead) -> dict[str, Any]:
     }
 
 
-def _serialize_call(call: Call, *, agent: OutperoAgent | None = None, lead: Lead | None = None) -> dict[str, Any]:
+def _quote_evidence_from_captured(captured: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return verified quote evidence only when explicitly stored on the call.
+
+    Never infer a quote or confirmation from call.summary.
+    """
+    if not isinstance(captured, dict):
+        return None
+    evidence = captured.get("quote_evidence")
+    if not isinstance(evidence, dict):
+        return None
+    quote_ref = evidence.get("quote_ref")
+    if not quote_ref:
+        return None
+    return {
+        "quote_ref": quote_ref,
+        "state": evidence.get("state"),
+        "check_in": evidence.get("check_in"),
+        "check_out": evidence.get("check_out"),
+        "guest_count": evidence.get("guest_count"),
+        "nights": evidence.get("nights"),
+        "total": evidence.get("total"),
+        "currency": evidence.get("currency"),
+        "rate_per_night": evidence.get("rate_per_night"),
+        "associated_at": evidence.get("associated_at"),
+        "association": evidence.get("association"),
+    }
+
+
+def _serialize_call(
+    call: Call,
+    *,
+    agent: OutperoAgent | None = None,
+    lead: Lead | None = None,
+    include_transcript: bool = False,
+) -> dict[str, Any]:
     outcome = call.outcome.value if hasattr(call.outcome, "value") else call.outcome
     direction = call.direction.value if hasattr(call.direction, "value") else call.direction
-    return {
+    captured = call.captured_fields or {}
+    # List/public responses never embed transcript text. Detail may include it.
+    safe_captured = {
+        k: v
+        for k, v in captured.items()
+        if k
+        not in {
+            "transcript",
+            "recording_url",
+            "pre_call",
+            "captured",
+        }
+    }
+    payload: dict[str, Any] = {
         "id": call.id,
         "lead_id": call.lead_id,
         "outpero_agent_id": call.outpero_agent_id,
@@ -106,10 +205,31 @@ def _serialize_call(call: Call, *, agent: OutperoAgent | None = None, lead: Lead
         "outcome": outcome,
         "disposition": call.disposition,
         "duration_seconds": call.duration_seconds,
-        "transcript": call.transcript,
-        "summary": call.summary,
-        "captured_fields": call.captured_fields or {},
-        "recording_url": call.recording_url,
+        "has_transcript": bool(call.transcript),
+        "has_summary": bool(call.summary),
+        "summary": call.summary if include_transcript else None,
+        "transcript": call.transcript if include_transcript else None,
+        "captured_fields": safe_captured if include_transcript else {
+            k: v
+            for k, v in safe_captured.items()
+            if k
+            in {
+                "connection_key",
+                "from_number",
+                "to_number",
+                "employee",
+                "hangup_reason",
+                "is_test",
+                "phase",
+                "quote_evidence",
+                "transcript_excluded",
+                "summary_excluded",
+                "recording_excluded",
+                "captured_excluded",
+            }
+        },
+        "quote_evidence": _quote_evidence_from_captured(captured),
+        "recording_url": call.recording_url if include_transcript else None,
         "provider": call.provider,
         "provider_call_sid": call.provider_call_sid,
         "is_test": call.is_test,
@@ -120,6 +240,7 @@ def _serialize_call(call: Call, *, agent: OutperoAgent | None = None, lead: Lead
         "realtime": outcome
         not in ("completed", "failed", "canceled", "busy", "no_answer"),
     }
+    return payload
 
 
 @workspace_router.get("/status")
@@ -140,6 +261,17 @@ def outpero_status(
         "action_context_url": (
             f"{settings.public_api_base_url.rstrip('/')}/v1/webhooks/outpero/{workspace_id}/lead-context"
         ),
+        "vfarms_action_urls": {
+            "check_stay_availability": (
+                f"{settings.public_api_base_url.rstrip('/')}/v1/webhooks/outpero/{workspace_id}/actions/check_stay_availability"
+            ),
+            "create_stay_reservation": (
+                f"{settings.public_api_base_url.rstrip('/')}/v1/webhooks/outpero/{workspace_id}/actions/create_stay_reservation"
+            ),
+            "create_staff_followup": (
+                f"{settings.public_api_base_url.rstrip('/')}/v1/webhooks/outpero/{workspace_id}/actions/create_staff_followup"
+            ),
+        },
         "supported_operations": [
             "register_agent_locally",
             "refresh_schema",
@@ -148,6 +280,9 @@ def outpero_status(
             "receive_call_ended_webhook",
             "sync_leads_and_transcripts",
             "mid_call_lead_context_action",
+            "vfarms_check_stay_availability",
+            "vfarms_create_stay_reservation",
+            "vfarms_create_staff_followup",
         ],
         "unsupported_operations": [
             "list_agents_from_outpero_api",
@@ -329,6 +464,32 @@ def refresh_outpero_call(
     agent = get_agent(db, workspace_id, call.outpero_agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Inbound imports: recover transcript/summary only (no lead creation).
+    direction = call.direction.value if hasattr(call.direction, "value") else call.direction
+    inbound_connection = db.scalars(
+        select(OutperoInboundConnection).where(
+            OutperoInboundConnection.workspace_id == workspace_id,
+            OutperoInboundConnection.outpero_agent_id == call.outpero_agent_id,
+            OutperoInboundConnection.enabled.is_(True),
+        )
+    ).first()
+    if direction == "inbound" and inbound_connection is not None:
+        from app.services.outpero.inbound_import import recover_inbound_transcript_from_provider
+
+        result = recover_inbound_transcript_from_provider(
+            db, call=call, connection=inbound_connection
+        )
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=502,
+                detail=f"Transcript recovery failed ({result.get('reason')}).",
+            )
+        call = db.get(Call, call_id)
+        assert call is not None
+        lead = db.get(Lead, call.lead_id) if call.lead_id else None
+        return _serialize_call(call, agent=agent, lead=lead, include_transcript=True)
+
     try:
         call = refresh_call_status(db, agent=agent, call=call)
     except ValueError as exc:
@@ -336,7 +497,24 @@ def refresh_outpero_call(
     except OutperoApiError as exc:
         raise HTTPException(status_code=exc.status_code or 502, detail=str(exc)) from exc
     lead = db.get(Lead, call.lead_id) if call.lead_id else None
-    return _serialize_call(call, agent=agent, lead=lead)
+    return _serialize_call(call, agent=agent, lead=lead, include_transcript=True)
+
+
+@workspace_router.get("/calls/{call_id}")
+def get_outpero_call(
+    workspace_id: UUID,
+    call_id: UUID,
+    _m: Membership = Depends(get_workspace_membership),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    call = db.get(Call, call_id)
+    if not call or call.workspace_id != workspace_id or call.provider != "outpero":
+        raise HTTPException(status_code=404, detail="Outpero call not found")
+    agent = (
+        get_agent(db, workspace_id, call.outpero_agent_id) if call.outpero_agent_id else None
+    )
+    lead = db.get(Lead, call.lead_id) if call.lead_id else None
+    return _serialize_call(call, agent=agent, lead=lead, include_transcript=True)
 
 
 @workspace_router.get("/calls")
@@ -492,6 +670,35 @@ def lead_conversation_history(
     }
 
 
+@workspace_router.get("/availability-activity")
+def list_availability_activity_endpoint(
+    workspace_id: UUID,
+    limit: int = Query(default=50, ge=1, le=100),
+    _m: Membership = Depends(get_workspace_membership),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Workspace-scoped availability-check lifecycle for Live inbound Calls."""
+    from app.services.vfarms.availability_activity import list_availability_activity
+
+    items = list_availability_activity(db, workspace_id=workspace_id, limit=limit)
+    return {"items": items, "count": len(items)}
+
+
+@workspace_router.get("/availability-activity/{activity_id}")
+def get_availability_activity_endpoint(
+    workspace_id: UUID,
+    activity_id: UUID,
+    _m: Membership = Depends(get_workspace_membership),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    from app.services.vfarms.availability_activity import get_availability_activity
+
+    item = get_availability_activity(db, workspace_id=workspace_id, activity_id=activity_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Availability activity not found")
+    return item
+
+
 @workspace_router.get("/sync-logs")
 def list_sync_logs(
     workspace_id: UUID,
@@ -550,6 +757,226 @@ def _process_webhook_background(
                 db.commit()
     finally:
         db.close()
+
+
+def _process_inbound_webhook_background(
+    *,
+    connection_id: UUID,
+    event_id: UUID,
+    payload: dict[str, Any],
+    is_test: bool,
+) -> None:
+    db = SessionLocal()
+    try:
+        connection = db.get(OutperoInboundConnection, connection_id)
+        event = db.get(OutperoWebhookEvent, event_id)
+        if connection is None or event is None:
+            return
+        if event.status == "processed":
+            return
+        try:
+            process_inbound_call_ended(
+                db,
+                connection=connection,
+                payload=payload,
+                event_row=event,
+                is_test=is_test,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("outpero_inbound_process_failed event=%s", event_id)
+            if event:
+                event.status = "failed"
+                event.error_message = str(exc)[:1000]
+                db.commit()
+    finally:
+        db.close()
+
+
+def _outpero_sig_headers(request: Request) -> tuple[str | None, str | None]:
+    """Read Outpero signing headers case-insensitively from the raw request."""
+    # Prefer request.headers — more reliable than FastAPI Header() alias binding.
+    ts = request.headers.get("x-outpero-timestamp") or request.headers.get("X-Outpero-Timestamp")
+    sig = request.headers.get("x-outpero-signature") or request.headers.get("X-Outpero-Signature")
+    return ts, sig
+
+
+@webhook_router.post("/inbound/{connection_key}")
+async def outpero_inbound_call_ended_webhook(
+    connection_key: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Phase-1 inbound import. Workspace is resolved from connection_key only."""
+    settings = get_settings()
+    if not inbound_import_enabled(settings):
+        raise HTTPException(status_code=503, detail="Outpero inbound import disabled")
+
+    raw = await request.body()
+    x_outpero_timestamp, x_outpero_signature = _outpero_sig_headers(request)
+    logger.info(
+        "outpero_inbound_hit key=%s body_len=%s has_ts=%s has_sig=%s content_type=%s",
+        connection_key,
+        len(raw),
+        bool(x_outpero_timestamp),
+        bool(x_outpero_signature),
+        request.headers.get("content-type"),
+    )
+
+    connection = resolve_inbound_connection(db, connection_key)
+    if connection is None or not connection.enabled:
+        raise HTTPException(status_code=404, detail="Unknown or disabled Outpero connection")
+
+    secret = connection_signing_secret(connection, settings)
+    if not secret:
+        logger.warning("outpero_inbound_missing_secret connection=%s", connection_key)
+        raise HTTPException(status_code=503, detail="Connection signing secret not configured")
+
+    # Verify HMAC over raw bytes before trusting JSON.
+    sig_ok = verify_outpero_signature(
+        secret=secret,
+        timestamp=x_outpero_timestamp,
+        signature_header=x_outpero_signature,
+        raw_body=raw,
+        max_age_seconds=settings.outpero_webhook_max_age_seconds,
+    )
+    if not sig_ok:
+        diag = diagnose_outpero_signature(
+            secret=secret,
+            timestamp=x_outpero_timestamp,
+            signature_header=x_outpero_signature,
+            raw_body=raw,
+            max_age_seconds=settings.outpero_webhook_max_age_seconds,
+        )
+        try:
+            import json as _json
+            from pathlib import Path
+
+            dump = {
+                "connection_key": connection_key,
+                "diag": diag,
+                "header_names": sorted({k.lower() for k in request.headers.keys()}),
+                "content_type": request.headers.get("content-type"),
+                "body_preview": raw[:800].decode("utf-8", errors="replace"),
+            }
+            Path("/tmp/outpero-inbound-last-fail.json").write_text(
+                _json.dumps(dump, indent=2), encoding="utf-8"
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("outpero_inbound_fail_dump_error")
+
+        allow_unsigned = (
+            bool(settings.outpero_inbound_accept_unsigned)
+            and diag.get("reason") == "missing_headers"
+            and (settings.karyuk_deployment or settings.app_env or "").strip().lower()
+            not in {"production", "prod"}
+        )
+        if allow_unsigned:
+            logger.warning(
+                "outpero_inbound_unsigned_accepted key=%s reason=%s",
+                connection_key,
+                diag.get("reason"),
+            )
+        else:
+            raise HTTPException(
+                status_code=401,
+                detail=f"Invalid Outpero webhook signature ({diag.get('reason')})",
+            )
+
+    try:
+        import json as _json
+
+        payload = _json.loads(raw.decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Webhook payload must be a JSON object")
+
+    deny = validate_binding(connection, payload)
+    if deny:
+        flat = allowlisted_payload(payload)
+        logger.warning(
+            "outpero_inbound_binding_denied key=%s reason=%s event=%s employee=%s to=%s did=%s expected_did=%s expected_slug=%s",
+            connection_key,
+            deny,
+            flat.get("event"),
+            flat.get("employee") or flat.get("slug"),
+            flat.get("to_number") or flat.get("to"),
+            flat.get("did") or flat.get("destination"),
+            connection.did_e164,
+            connection.employee_slug,
+        )
+        try:
+            import json as _json
+            from pathlib import Path
+
+            Path("/tmp/outpero-inbound-last-deny.json").write_text(
+                _json.dumps(
+                    {
+                        "reason": deny,
+                        "expected_did": connection.did_e164,
+                        "expected_slug": connection.employee_slug,
+                        "flat": flat,
+                    },
+                    default=str,
+                ),
+                encoding="utf-8",
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("outpero_inbound_deny_dump_error")
+        raise HTTPException(status_code=403, detail=deny)
+
+    safe_payload = allowlisted_payload(payload)
+    event_key = durable_event_key(connection.connection_key, safe_payload)
+    existing = db.execute(
+        select(OutperoWebhookEvent).where(
+            OutperoWebhookEvent.workspace_id == connection.workspace_id,
+            OutperoWebhookEvent.event_key == event_key,
+        )
+    ).scalar_one_or_none()
+    if existing and existing.status == "processed":
+        return {"accepted": True, "duplicate": True, "event_id": str(existing.id)}
+
+    if existing is None:
+        existing = OutperoWebhookEvent(
+            workspace_id=connection.workspace_id,
+            outpero_agent_id=connection.outpero_agent_id,
+            event_key=event_key,
+            external_call_id=str(safe_payload.get("call_id") or "") or None,
+            event_type=str(safe_payload.get("event") or "call.ended"),
+            payload=safe_payload,
+            status="received",
+        )
+        db.add(existing)
+        try:
+            db.commit()
+            db.refresh(existing)
+        except IntegrityError:
+            db.rollback()
+            existing = db.execute(
+                select(OutperoWebhookEvent).where(
+                    OutperoWebhookEvent.workspace_id == connection.workspace_id,
+                    OutperoWebhookEvent.event_key == event_key,
+                )
+            ).scalar_one()
+            if existing.status == "processed":
+                return {"accepted": True, "duplicate": True, "event_id": str(existing.id)}
+            # Fall through to schedule recovery processing once.
+
+    is_test = bool(safe_payload.get("karyuk_test"))
+    # Persist durable receipt before ack; process asynchronously (Outpero 5s timeout).
+    background_tasks.add_task(
+        _process_inbound_webhook_background,
+        connection_id=connection.id,
+        event_id=existing.id,
+        payload=safe_payload,
+        is_test=is_test,
+    )
+    return {
+        "accepted": True,
+        "duplicate": existing.status == "processed",
+        "event_id": str(existing.id),
+    }
 
 
 @webhook_router.post("/{workspace_id}")
@@ -655,15 +1082,12 @@ async def outpero_call_ended_webhook(
     return {"accepted": True, "duplicate": False, "event_id": existing.id}
 
 
-@webhook_router.post("/{workspace_id}/lead-context")
-def outpero_mid_call_lead_context(
+def _resolve_action_agent(
+    db: Session,
     workspace_id: UUID,
-    body: LeadContextRequest,
-    db: Session = Depends(get_db),
-    x_outpero_action_secret: str | None = Header(default=None, alias="X-Outpero-Action-Secret"),
-    x_outpero_agent_slug: str | None = Header(default=None, alias="X-Outpero-Agent-Slug"),
-) -> dict[str, Any]:
-    """Custom API Action target: return prior lead context during a live Outpero call."""
+    x_outpero_agent_slug: str | None,
+    x_outpero_action_secret: str | None,
+) -> OutperoAgent:
     agent: OutperoAgent | None = None
     if x_outpero_agent_slug:
         agent = db.execute(
@@ -682,10 +1106,105 @@ def outpero_mid_call_lead_context(
         raise HTTPException(status_code=401, detail="Unauthorized")
     if not x_outpero_action_secret or x_outpero_action_secret != agent.action_secret:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    return agent
+
+
+@webhook_router.post("/{workspace_id}/lead-context")
+def outpero_mid_call_lead_context(
+    workspace_id: UUID,
+    body: LeadContextRequest,
+    db: Session = Depends(get_db),
+    x_outpero_action_secret: str | None = Header(default=None, alias="X-Outpero-Action-Secret"),
+    x_outpero_agent_slug: str | None = Header(default=None, alias="X-Outpero-Agent-Slug"),
+) -> dict[str, Any]:
+    """Custom API Action target: return prior lead context during a live Outpero call."""
+    _resolve_action_agent(db, workspace_id, x_outpero_agent_slug, x_outpero_action_secret)
     try:
         return lead_context_for_phone(db, workspace_id=workspace_id, phone=body.phone)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@webhook_router.post("/{workspace_id}/actions/check_stay_availability")
+def outpero_action_check_stay_availability(
+    workspace_id: UUID,
+    body: CheckStayAvailabilityRequest,
+    db: Session = Depends(get_db),
+    x_outpero_action_secret: str | None = Header(default=None, alias="X-Outpero-Action-Secret"),
+    x_outpero_agent_slug: str | None = Header(default=None, alias="X-Outpero-Agent-Slug"),
+) -> dict[str, Any]:
+    """Outpero Custom API: live V-Farms estate availability + short-lived quote."""
+    from app.services.vfarms.actions import check_stay_availability
+
+    _resolve_action_agent(db, workspace_id, x_outpero_agent_slug, x_outpero_action_secret)
+    return check_stay_availability(
+        db,
+        workspace_id=workspace_id,
+        check_in=body.check_in or body.checkIn,
+        check_out=body.check_out or body.checkOut,
+        guest_count=body.guest_count if body.guest_count is not None else (body.guests or body.adults),
+        call_id=body.call_id or body.outpero_call_id,
+        provider_call_id=body.provider_call_id or body.providerCallId,
+    )
+
+
+@webhook_router.post("/{workspace_id}/actions/create_stay_reservation")
+def outpero_action_create_stay_reservation(
+    workspace_id: UUID,
+    body: CreateStayReservationRequest,
+    db: Session = Depends(get_db),
+    x_outpero_action_secret: str | None = Header(default=None, alias="X-Outpero-Action-Secret"),
+    x_outpero_agent_slug: str | None = Header(default=None, alias="X-Outpero-Agent-Slug"),
+) -> dict[str, Any]:
+    """Outpero Custom API: commit only after explicit caller approval + valid quote."""
+    from app.services.vfarms.actions import create_stay_reservation
+
+    _resolve_action_agent(db, workspace_id, x_outpero_agent_slug, x_outpero_action_secret)
+    confirmed = bool(
+        body.caller_confirmed
+        or body.callerConfirmed
+        or body.confirm
+    )
+    return create_stay_reservation(
+        db,
+        workspace_id=workspace_id,
+        quote_ref=(body.quote_ref or body.quoteRef or ""),
+        guest_name=body.guest_name or body.guestName,
+        guest_email=body.guest_email or body.guestEmail,
+        guest_phone=body.guest_phone or body.guestPhone,
+        attempt_key=body.attempt_key or body.attemptKey,
+        caller_confirmed=confirmed,
+    )
+
+
+@webhook_router.post("/{workspace_id}/actions/create_staff_followup")
+def outpero_action_create_staff_followup(
+    workspace_id: UUID,
+    body: CreateStaffFollowupRequest,
+    db: Session = Depends(get_db),
+    x_outpero_action_secret: str | None = Header(default=None, alias="X-Outpero-Action-Secret"),
+    x_outpero_agent_slug: str | None = Header(default=None, alias="X-Outpero-Agent-Slug"),
+) -> dict[str, Any]:
+    """Outpero Custom API: durable staff follow-up via voice_booking_requests."""
+    from app.services.vfarms.actions import create_staff_followup
+
+    _resolve_action_agent(db, workspace_id, x_outpero_agent_slug, x_outpero_action_secret)
+    details = dict(body.details or {})
+    if body.check_in:
+        details.setdefault("check_in", body.check_in)
+    if body.check_out:
+        details.setdefault("check_out", body.check_out)
+    if body.guest_count is not None:
+        details.setdefault("guest_count", body.guest_count)
+    if body.notes:
+        details.setdefault("notes", body.notes)
+    return create_staff_followup(
+        db,
+        workspace_id=workspace_id,
+        reason=(body.reason or "guest_requested_help").strip() or "guest_requested_help",
+        details=details,
+        caller_phone=body.caller_phone or body.phone,
+    )
 
 
 # Aggregate for include_router

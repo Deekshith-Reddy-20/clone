@@ -306,16 +306,8 @@ def process_inbound_speech(
         "అంతే చాలు",
         "anthe chalu",
     )
-    st_now = load_booking(fields)
-    thank_you = (
-        "thank you" in lowered
-        or lowered.strip() in {"thanks", "thankyou"}
-        or "థ్యాంక్యూ" in text
-        or "థాంక్యూ" in text
-    )
-    if any(p in lowered for p in hangup_phrases) or "అంతే చాలు" in text or (
-        thank_you and st_now.booking_confirmed
-    ):
+    # Clear goodbye only — short thanks / acks after a noted request must not hang up.
+    if any(p in lowered for p in hangup_phrases) or "అంతే చాలు" in text:
         bye = {
             "te-IN": "సరే అండి, థ్యాంక్యూ.",
             "hi-IN": "ठीक है जी, धन्यवाद।",

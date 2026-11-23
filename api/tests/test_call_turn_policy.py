@@ -34,6 +34,16 @@ class CallTurnPolicyTests(unittest.TestCase):
         q = "क्या इस वीकेंड में कमरा उपलब्ध है?"
         self.assertIsNone(reject_turn_reason(q, employee_language="Telugu", conversation_language="te-IN"))
 
+    def test_short_telugu_accepted(self) -> None:
+        self.assertIsNone(reject_turn_reason("ఉన్నాయా", employee_language="Telugu"))
+
+    def test_english_ack_and_date_slot(self) -> None:
+        self.assertIsNone(reject_turn_reason("sure", employee_language="Telugu", conversation_language="te-IN"))
+        self.assertIsNone(reject_turn_reason("22", employee_language="Telugu"))
+        self.assertIsNone(
+            reject_turn_reason("twenty two", employee_language="Telugu", conversation_language="te-IN")
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

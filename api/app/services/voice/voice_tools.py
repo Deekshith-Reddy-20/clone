@@ -237,16 +237,16 @@ def _execute_tool_inner(
                 else "Before I note the request — can you confirm those dates verbally?"
             )
         else:
+            from app.services.voice.voice_booking_slots import sync_checkout_from_nights
             from app.services.voice.voice_grounding_guard import _caller_resolved_dates
 
             st = load_booking(fields)
             if args.get("check_in"):
                 st.check_in = str(args["check_in"])
             _cin, cout_c = _caller_resolved_dates(caller_text, fields)
+            # Keep previously computed checkout (from nights); only override if caller said one.
             if cout_c:
                 st.check_out = cout_c
-            else:
-                st.check_out = None
             dates = parse_spoken_dates(caller_text)
             if dates and not st.check_in:
                 st.check_in = dates[0]
@@ -255,6 +255,7 @@ def _execute_tool_inner(
                 if st.check_in and st.check_out
                 else None
             )
+            st = sync_checkout_from_nights(st)
             fields[BOOKING_KEY] = dump_booking(st)
             create_voice_booking_request(
                 db,
@@ -262,6 +263,7 @@ def _execute_tool_inner(
                 details={
                     "check_in": st.check_in,
                     "check_out": st.check_out,
+                    "nights": st.nights,
                     "guests": args.get("guests") or st.guest_count,
                     "source": "voice",
                 },

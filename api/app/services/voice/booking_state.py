@@ -837,8 +837,33 @@ def check_availability(
 
 def confirmation_yes(text: str) -> bool | None:
     t = utterance_fingerprint(text)
-    raw = text or ""
-    yes = {"yes", "ok", "okay", "confirm", "book it", "అవును", "సరే", "బుక్ చేయండి", "हाँ", "हां", "जी", "ठीक है"}
+    raw = (text or "").strip()
+    low = raw.lower().strip(".,!? ")
+    yes = {
+        "yes",
+        "ok",
+        "okay",
+        "confirm",
+        "book it",
+        "sure",
+        "fine",
+        "haan",
+        "ha",
+        "అవును",
+        "అవునండి",
+        "సరే",
+        "సరే అండి",
+        "ఆ",
+        "హా",
+        "ఆ అండి",
+        "బుక్ చేయండి",
+        "हाँ",
+        "हां",
+        "जी",
+        "ठीक है",
+        "okay అండి",
+        "ok అండి",
+    }
     no = {"no", "cancel", "not now", "వద్దు", "కాదు", "नहीं", "नही"}
     if re.search(
         r"చేశారా|చేసుకున్న|చూశారా|చూసి\s*చెప్|booked yet|did you book|is it booked",
@@ -848,9 +873,23 @@ def confirmation_yes(text: str) -> bool | None:
         return None
     if "booked" in t and "book it" not in t:
         return None
-    if t in yes or any(
-        p in t or p in raw
-        for p in ("please book", "go ahead", "book చేయండి", "book చెయ్", "బుక్ చేయండి", "సరిపోతాయి")
+    if t in yes or low in yes or raw in yes:
+        return True
+    if any(
+        p in t or p in raw or p in low
+        for p in (
+            "please book",
+            "go ahead",
+            "book చేయండి",
+            "book చెయ్",
+            "బుక్ చేయండి",
+            "సరిపోతాయి",
+            "పెట్టండి",
+            "పెట్టు",
+            "పెట్టేయండి",
+            "note చేయండి",
+            "నోట్ చేయండి",
+        )
     ):
         return True
     if t in no or "cancel" in t:

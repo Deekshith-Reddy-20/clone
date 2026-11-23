@@ -55,27 +55,30 @@ from app.services.voice.sarvam import (
 
 logger = logging.getLogger(__name__)
 
-SILENCE_SECONDS = 0.62
+SILENCE_SECONDS = 0.48
 BARGE_IN_MIN_MS = 300
 BARGE_IN_PCM_BYTES = 4800  # 300 ms @ 8 kHz PCM16
-SILENCE_SECONDS_LONG = 1.85  # caller spelling phone / dates with pauses
-MIN_SPEECH_BYTES = 8_000  # ~0.5 s of 8 kHz mono PCM16
-POST_SPEECH_COOLDOWN = 0.35
+SILENCE_SECONDS_LONG = 1.05  # caller spelling phone / dates with pauses
+MIN_SPEECH_BYTES = 6_400  # ~0.4 s of 8 kHz mono PCM16
+POST_SPEECH_COOLDOWN = 0.22
 # Outbound frame size set from inbound media_format (100–200 ms, multiple of 320 @ 8 kHz)
 CHUNK_PCM = 3200
 TTS_CHUNK_PAUSE_S = 0.08
 # Exotel still plays audio after we finish sending chunks — ignore mic until then (+echo tail).
-PLAYBACK_TAIL_S = 0.28
+PLAYBACK_TAIL_S = 0.16
 MIN_STT_RMS = 55  # PSTN mobile mics are often quieter than browser mic
+# Line noise on Exotel often sits above MIN_STT_RMS and was resetting the end-of-utterance
+# timer forever (8s buffers). Only real voice should extend the turn.
+SPEECH_CONTINUE_RMS = 80
 MIN_STT_RMS_HARD_FLOOR = 22  # below this: line noise / echo only — discard, never STT
 MIN_STT_RMS_BROWSER = 45
-BROWSER_SILENCE_SECONDS = 1.05
+BROWSER_SILENCE_SECONDS = 0.85
 # Keep early caller syllables that arrive during agent playback (greeting / TTS), not agent echo.
 PRE_ROLL_MAX_BYTES = 32_000  # ~2 s @ 8 kHz PCM16
 # Echo during agent TTS fills pre_roll; only keep the tail when listen opens.
 PRE_ROLL_MERGE_TAIL_BYTES = 16_000  # ~1 s @ 8 kHz PCM16
-# Cap one utterance (~8 s) so PSTN line noise cannot block STT until hangup.
-MAX_UTTERANCE_PCM_BYTES = 128_000
+# Cap one utterance (~4 s) so mid-phrase pauses still commit on PSTN.
+MAX_UTTERANCE_PCM_BYTES = 64_000
 MARK_GREETING_PLAYBACK = "karyuk-greeting-playback-done"
 MARK_UTTERANCE_PLAYBACK = "karyuk-utterance-playback-done"
 MARK_FALLBACK_CAP_S = 12.0
@@ -179,10 +182,15 @@ class ExotelVoicebotSession:
         return rms >= MIN_STT_RMS
 
     def _chunk_has_speech_energy(self, pcm: bytes) -> bool:
+        """True only when this chunk should extend the current utterance.
+
+        PSTN uses a higher floor than STT acceptance so idle line noise does not
+        keep re-arming the silence timer (symptom: 5–8s buffers, late commits).
+        """
         if len(pcm) < 320:
             return False
         try:
-            floor = self._min_stt_rms() if self._browser_preview else MIN_STT_RMS
+            floor = self._min_stt_rms() if self._browser_preview else SPEECH_CONTINUE_RMS
             return audioop.rms(pcm, 2) >= floor
         except Exception:
             return False
@@ -835,7 +843,7 @@ class ExotelVoicebotSession:
                         asyncio.to_thread(
                             sarvam_transcribe_pcm, buf, hint_language=self._listen_lang
                         ),
-                        timeout=22.0,
+                        timeout=12.0,
                     )
                 else:
                     from app.services.voice.gemini import transcribe_pcm_wav
@@ -990,7 +998,9 @@ class ExotelVoicebotSession:
     def _silence_pause_seconds(self) -> float:
         if self._browser_preview:
             return BROWSER_SILENCE_SECONDS
-        if len(self.pcm_buffer) > 120_000:
+        # Slightly longer pause only while the caller is already mid-utterance
+        # (dates / phone digits), not from the first syllable.
+        if len(self.pcm_buffer) > 48_000:
             return SILENCE_SECONDS_LONG
         return SILENCE_SECONDS
 
@@ -1020,10 +1030,13 @@ class ExotelVoicebotSession:
             if not has_speech:
                 self._utterance_end_deadline = 0.0
                 continue
-            combined = bytes(self.pcm_buffer) if self.pcm_buffer else bytes(self._pre_roll)
-            if len(combined) >= MIN_SPEECH_BYTES and not self._buffer_meets_stt_energy(combined):
-                self._discard_low_energy_buffer(reason="silence_loop")
-                continue
+            # Never wipe pre_roll while the agent is still talking — that drops
+            # early caller syllables captured during greeting/TTS.
+            if accepting and len(self.pcm_buffer) >= MIN_SPEECH_BYTES:
+                combined = bytes(self.pcm_buffer)
+                if not self._buffer_meets_stt_energy(combined):
+                    self._discard_low_energy_buffer(reason="silence_loop")
+                    continue
             if accepting and self._pre_roll:
                 self._merge_pre_roll_into_buffer()
             if accepting and len(self.pcm_buffer) >= MAX_UTTERANCE_PCM_BYTES:
@@ -1329,15 +1342,22 @@ class ExotelVoicebotSession:
             self._agent_audio_started_at = time.monotonic()
         tts_lang = self._tts_lang_for_text(sentence)
         tts_t0 = time.monotonic()
-        if self._bulbul is None:
-            self._bulbul = BulbulTtsSession(speaker=self._tts_speaker)
-        if self._tts_ws_failed:
-            pcm = await asyncio.to_thread(sarvam_tts_pcm_8k, sentence, tts_lang, speaker=self._tts_speaker)
-        else:
-            pcm = await asyncio.to_thread(self._bulbul.synthesize_pcm8k, sentence, tts_lang)
-            if not pcm:
-                self._tts_ws_failed = True
-                pcm = await asyncio.to_thread(sarvam_tts_pcm_8k, sentence, tts_lang, speaker=self._tts_speaker)
+        # Always use REST TTS on PSTN. Bulbul streaming WS can hang on connect/recv
+        # (same failure mode as Saaras WS STT) and leave the caller with silence.
+        try:
+            pcm = await asyncio.wait_for(
+                asyncio.to_thread(
+                    sarvam_tts_pcm_8k,
+                    sentence,
+                    tts_lang,
+                    speaker=self._tts_speaker,
+                    rest_only=True,
+                ),
+                timeout=12.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Voicebot %s REST TTS timeout for stream sentence", self.call_id)
+            pcm = b""
         if not pcm:
             self.speaking = False
             return
@@ -1388,7 +1408,8 @@ class ExotelVoicebotSession:
             self._agent_audio_started_at = 0.0
             t1 = time.monotonic()
             stt_ms = int((t1 - turn_started_at) * 1000) if turn_started_at else 0
-            use_stream = os.getenv("KARYUK_PSTN_STREAM", "1").strip() not in ("0", "false", "no")
+            # Default off: streaming LLM+TTS path was hanging after STT on live Exotel.
+            use_stream = os.getenv("KARYUK_PSTN_STREAM", "0").strip() in ("1", "true", "on", "yes")
             if use_stream and not self._browser_preview:
 
                 async def _on_sentence(sent: str, mark: str) -> None:
@@ -1406,12 +1427,6 @@ class ExotelVoicebotSession:
                     db, call, caller_text=text, stt_language=stt_language or None
                 )
                 fields = call.captured_fields or {}
-                if reply.strip():
-                    from app.services.voice.spoken_output import filter_caller_facing_reply
-
-                    spoken = cap_spoken_reply(filter_caller_facing_reply(reply, lang=self.lang_code))
-                    await self._emit_browser_transcript("agent", spoken, turn_id=self._voice_turn_seq)
-                    await self._speak(spoken)
             think_ms = int((time.monotonic() - t1) * 1000)
             db.refresh(call)
             fields = call.captured_fields or {}
@@ -1433,10 +1448,14 @@ class ExotelVoicebotSession:
                 self._speech_stack = "sarvam"
                 if conv in ("te-IN", "hi-IN"):
                     self._caller_language_locked = True
+            # Speak at most once. Stream path already played sentences via on_sentence.
             if reply and reply.strip() and use_stream and not self._browser_preview:
                 from app.services.voice.spoken_output import filter_caller_facing_reply
 
-                spoken = cap_spoken_reply(filter_caller_facing_reply(reply, lang=self.lang_code))
+                spoken = cap_spoken_reply(
+                    filter_caller_facing_reply(reply, lang=self.lang_code),
+                    max_chars=160,
+                )
                 await self._emit_browser_transcript("agent", spoken, turn_id=self._voice_turn_seq)
                 tts_ttfb_ms = (
                     int((self._first_agent_media_at - self._caller_eos_at) * 1000)
@@ -1447,12 +1466,19 @@ class ExotelVoicebotSession:
                 from app.services.voice.spoken_output import filter_caller_facing_reply
 
                 spoken = cap_spoken_reply(
-                    filter_caller_facing_reply(reply, lang=self.lang_code)
+                    filter_caller_facing_reply(reply, lang=self.lang_code),
+                    max_chars=160,
                 )
-                await self._emit_browser_transcript("agent", spoken, turn_id=self._voice_turn_seq)
-                tts_t0 = time.monotonic()
-                await self._speak(spoken)
-                tts_ttfb_ms = int((time.monotonic() - tts_t0) * 1000)
+                # Skip identical back-to-back agent lines (echo / tiny STT loops).
+                if spoken == getattr(self, "_last_spoken_reply", ""):
+                    logger.info("Voicebot %s duplicate reply skipped", self.call_id)
+                    tts_ttfb_ms = 0
+                else:
+                    await self._emit_browser_transcript("agent", spoken, turn_id=self._voice_turn_seq)
+                    tts_t0 = time.monotonic()
+                    await self._speak(spoken)
+                    self._last_spoken_reply = spoken
+                    tts_ttfb_ms = int((time.monotonic() - tts_t0) * 1000)
             else:
                 tts_ttfb_ms = 0
             if reply and reply.strip():
@@ -1497,7 +1523,14 @@ class ExotelVoicebotSession:
                     total_ms,
                 )
             if hangup:
-                await asyncio.sleep(0.5)
+                # Let farewell TTS finish on the PSTN leg, then close WSS so Exotel
+                # advances past Voicebot (Hangup / next applet) and ends the call.
+                await asyncio.sleep(1.2)
+                try:
+                    await self.ws.close()
+                except Exception:
+                    logger.info("Voicebot %s hangup close failed", self.call_id)
+                return
         except Exception:
             logger.exception("Voicebot %s turn failed", self.call_id)
             from app.services.voice.voice_repair_policy import pick_repair_reply

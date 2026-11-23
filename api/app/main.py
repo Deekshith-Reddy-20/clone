@@ -58,6 +58,9 @@ def root() -> dict[str, str | list[str]]:
         "exotel_voice_example": f"{base}/v1/webhooks/exotel/voice/{{call_id}}",
         "exotel_status_example": f"{base}/v1/webhooks/exotel/status/{{call_id}}",
         "outpero_webhook_example": f"{base}/v1/webhooks/outpero/{{workspace_id}}",
+        "outpero_inbound_webhook_example": (
+            f"{base}/v1/webhooks/outpero/inbound/{{connection_key}}"
+        ),
         "hint": "Open /health to verify the tunnel. Restart API after changing PUBLIC_API_BASE_URL in .env.",
     }
 
@@ -81,6 +84,7 @@ def bootstrap_outpero_agent() -> None:
     """Register default voice agent from OUTPERO_DEFAULT_* env when present."""
     from app.database import SessionLocal
     from app.services.outpero.agents import ensure_env_agent
+    from app.services.outpero.inbound_bootstrap import ensure_inbound_connection
 
     db = SessionLocal()
     try:
@@ -88,6 +92,11 @@ def bootstrap_outpero_agent() -> None:
         if agent:
             logging.getLogger(__name__).info(
                 "Voice agent ready slug=%s workspace=%s", agent.slug, agent.workspace_id
+            )
+        conn = ensure_inbound_connection(db)
+        if conn:
+            logging.getLogger(__name__).info(
+                "Outpero inbound connection ready key=%s", conn.connection_key
             )
     except Exception:
         logging.getLogger(__name__).exception("Voice agent env bootstrap failed")

@@ -29,7 +29,26 @@ _TELUGU_SHORT_ACK = frozenset(
 
 _HINDI_SHORT_ACK = frozenset({"हाँ", "हां", "जी", "ठीक", "नहीं", "हाँ जी", "हां जी"})
 
-_ENGLISH_SHORT_ACK = frozenset({"yes", "no", "ok", "okay", "yeah", "yep", "nope"})
+_ENGLISH_SHORT_ACK = frozenset(
+    {
+        "yes",
+        "no",
+        "ok",
+        "okay",
+        "yeah",
+        "yep",
+        "nope",
+        "sure",
+        "right",
+        "correct",
+        "fine",
+        "done",
+        "haan",
+        "ha",
+        "ji",
+        "please",
+    }
+)
 
 
 def employee_bcp47(employee_language: str | None) -> str:
@@ -49,7 +68,7 @@ def is_short_acknowledgment(text: str) -> bool:
         return True
     if any(p in t for p in ("ఆ అంతే", "book చేయండి", "సరే", "yes confirm", "okay book")):
         return True
-    return len(t) <= 6 and _has_telugu_script(t)
+    return len(t) <= 8 and _has_telugu_script(t)
 
 
 def is_booking_slot_turn(text: str) -> bool:
@@ -58,7 +77,14 @@ def is_booking_slot_turn(text: str) -> bool:
         return False
     if re.fullmatch(r"\d{1,2}", t):
         return True
-    if re.search(r"(వస్తారు|మంది|guests?|members?|గురం|నలుగురు|ఎల్లుండి|రేపు|check.?in|book)", t, re.I):
+    if re.search(r"\d", t) and len(t) <= 48:
+        return True
+    if re.search(
+        r"(వస్తారు|మంది|guests?|members?|గురం|నలుగురు|ఎల్లుండి|రేపు|check.?in|book|rooms?|"
+        r"గది|గదులు|పూల్|pool|available|ఉన్నాయా|ఉందా)",
+        t,
+        re.I,
+    ):
         return True
     return is_short_acknowledgment(t)
 
@@ -83,10 +109,14 @@ def reject_turn_reason(
         return None
     if len(t) < 2 and not _has_telugu_script(t):
         return "too_short"
+    # 1–3 char STT crumbs (often echo leftovers) — ignore unless ack/digit/booking.
+    if len(t) <= 3 and not is_short_acknowledgment(t) and not re.search(r"\d", t):
+        return "too_short"
 
     emp = employee_bcp47(employee_language)
     has_te = _has_telugu_script(t)
     has_hi = _has_devanagari_script(t)
+    conv = (conversation_language or "").strip() or emp
 
     if emp == "te-IN" and has_hi and not has_te:
         if is_hindi_ack_noise(t):
@@ -99,18 +129,23 @@ def reject_turn_reason(
         if low in ("hello", "hi", "hey") and len(t) < 10:
             return "english_ping"
 
-    if has_te and len(t) >= 6:
+    # Telugu speech is dense in characters — accept short real utterances.
+    if has_te and len(t) >= 3:
         return None
-    if len(t) >= 22 and not (emp == "te-IN" and has_hi and not has_te and len(t) < 28):
+    if len(t) >= 16 and not (emp == "te-IN" and has_hi and not has_te and len(t) < 28):
         return None
     if has_hi and len(t) >= 28:
         return None
     letters = [c for c in t if c.isalpha()]
-    if len(letters) >= 8:
+    if len(letters) >= 5:
         latin = sum(1 for c in letters if ord(c) < 128)
-        if latin / len(letters) > 0.85 and len(t) >= 10:
-            return None
-    if re.search(r"[a-zA-Z]{5,}", t):
+        if latin / len(letters) > 0.85 and len(t) >= 5:
+            # Mid-call English answers on a Telugu line (dates, "twenty two", etc.).
+            if conv in ("te-IN", "hi-IN", "en-IN") and len(t) >= 5:
+                return None
+            if len(t) >= 10:
+                return None
+    if re.search(r"[a-zA-Z]{4,}", t):
         return None
     return "low_signal"
 

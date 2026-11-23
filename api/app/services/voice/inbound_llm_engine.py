@@ -180,7 +180,10 @@ def _apply_guard_and_polish(
     vertical: str,
     last_agent_reply: str | None = None,
 ) -> tuple[str, bool]:
+    from app.services.voice.voice_booking_slots import collapse_repeated_spoken
+
     reply = filter_caller_facing_reply((reply or "").strip(), lang=lang)
+    reply = collapse_repeated_spoken(reply)
     reply = sanitize_reply_for_lang(reply, lang, vertical=vertical)
     reply, needs_regen = enforce_brevity(reply)
     if needs_regen:
@@ -189,6 +192,9 @@ def _apply_guard_and_polish(
         reply, brief=brief, lang=lang, last_agent_reply=last_agent_reply
     )
     if rejected:
+        return "", True
+    # Still identical to last agent line after polish → don't re-speak the same words.
+    if last_agent_reply and reply.strip() == last_agent_reply.strip():
         return "", True
     return cap_spoken_reply(reply, max_chars=220), False
 
@@ -288,11 +294,8 @@ def process_inbound_speech_llm_first(
         "వీడ్కోలు",
         "అంతే చాలు",
     )
-    st_now = load_booking(fields)
-    thank_you = "thank you" in lowered or lowered.strip() in {"thanks", "thankyou"} or "థ్యాంక్యూ" in text
-    if any(p in lowered for p in hangup_phrases) or "అంతే చాలు" in text or (
-        thank_you and st_now.booking_confirmed
-    ):
+    # Only hang up on clear goodbye — not on "thanks" / short acks after noting a request.
+    if any(p in lowered for p in hangup_phrases) or "అంతే చాలు" in text:
         bye = {
             "te-IN": "సరే అండి, థ్యాంక్యూ.",
             "hi-IN": "ठीक है जी, धन्यवाद।",
@@ -364,7 +367,7 @@ def process_inbound_speech_llm_first(
         fields = f2
         return spoken, fields, hang
 
-    slot_reply, fields = handle_booking_slot_turn(
+    slot_reply, fields, slot_hangup = handle_booking_slot_turn(
         db,
         call,
         fields,
@@ -394,8 +397,8 @@ def process_inbound_speech_llm_first(
             source="booking_slots",
         )
         call.captured_fields = fields
-        append_fn(db, call, turns, text, slot_reply, hangup=False)
-        return slot_reply, False
+        append_fn(db, call, turns, text, slot_reply, hangup=slot_hangup)
+        return slot_reply, slot_hangup
 
     from app.schemas.business_profile import BusinessProfile
     from app.services.voice.voice_location_followup import (

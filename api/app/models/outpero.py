@@ -77,6 +77,38 @@ class OutperoWebhookEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class OutperoInboundConnection(Base):
+    """Server-side binding for Phase-1 inbound call.ended import.
+
+    ``connection_key`` is the public URL lookup key. Workspace is resolved here —
+    never trusted from the webhook payload.
+    """
+
+    __tablename__ = "outpero_inbound_connections"
+    __table_args__ = (
+        UniqueConstraint("connection_key", name="uq_outpero_inbound_connection_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    connection_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    outpero_agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("outpero_agents.id", ondelete="SET NULL"), nullable=True
+    )
+    employee_slug: Mapped[str] = mapped_column(String(128))
+    did_e164: Mapped[str] = mapped_column(String(32))
+    signing_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    phase: Mapped[str] = mapped_column(String(64), default="inbound_call_import_v1")
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class OutperoSyncLog(Base):
     __tablename__ = "outpero_sync_logs"
 
